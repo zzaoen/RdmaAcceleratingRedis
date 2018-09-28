@@ -4,7 +4,9 @@
 
 Redis本身自带了集群实现方案，通过修改Redis中的配置文件并执行脚本可以将几台独立的Redis服务器组合成一个集群对外提供服务。我们可以集群模式运行redis-cli，或者在其他语言中使用Redis的API接口编写客户端访问Redis集群（比如Jedis），当我们执行set命令向集群中添加一对键值时，程序将这对键值存放在集群的其中一台服务上，也就是说执行set时，这对key-value在系统中只存在一份，即使集群启动的时候指定采用副本，那么一对key-value也只存放在一台Redis服务器和这台服务器对应的副本机器上；当我们执行get命令从集群获取一个key对应的值时，程序帮我们找到这个key所在Redis服务器的，并将value返回给客户端。如图1-1所示：
 
-![](D:\git\RdmaAcceleratingRedis\pic\redis-cluster-origin.jpg)
+![](./pic/redis-cluster-origin.jpg)
+
+
 
 图1-1 Redis自带的集群方案
 
