@@ -71,7 +71,7 @@ cd cluster-test
 通过Redis提供的一个基础程序`redis-trib`可以方便地对集群进行操作，这个程序使用Ruby编写，放置在`src/`中。因此需要安装ruby的开发环境和对应的redis接口。前置准备工作完成后可以通过以下命令建立集群。
 
 ```shell
-./redis-trib.rb create 127.0.0.1:7000 27.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 127.0.0.1:7004 127.0.0.1:7005
+./redis-trib.rb create {ip-1}:7000 {ip-2}:7000 {ip-3}:7000
 ```
 
 这样的简单命令只创建了3台Master Node构成的集群，没有任何备份用的Slave Node。
@@ -93,6 +93,28 @@ HASH_SLOT = CRC16(key) mod 16384
 ### 4.2 重定向客户端
 
 Redis cluster并不会代理查询，那么如果客户端访问了一个key不存在的节点，那么客户端就会接收到一条信息，告诉客户端想要的slot所在真正的Master node。
+
+## 5 RDMA网络备份策略
+
+在基于RDMA网络的Redis集群中，假设我们有3台server即3台Master node，分别为server1、server2、server3。同样地，server2和server3是server1的热备份，因此server1的数据通过RDMA网络发送到server2和server3里。
+
+具体的备份过程如下所示：
+
+1. 备份前server1存储的图片均在server1的redis数据库中
+
+2. server启动网络服务，等待client的连接
+
+3. server收到client的请求后，通过get操作查询redis数据库，并获取编码后的图片信息
+
+4. server将查询的图片编码信息存入申请好的内存空间内，这一段内存空间的结构如下所示。第一个段是标志位序列，用来标记哪些图片是最新修改的。第二个段是存储图片编码的数据块，以数组方式组织，每个数据块的大小是4MB。
+
+   ![1](./1.png)
+
+5. server将上述数据结构的首地址通过`ibv_post_send`操作以工作请求的方式放到发送队列，由RDMA网络发送给client
+
+6. client端收到图片数据存放的首地址信息后，通过标志位查询哪些图片数据是修改后还没commit的，然后将所有修改的数据块读入。读入的操作是通过`ibv_post_send`操作，计算Addr和Flag标志位产生的偏移量，得到修改后数据存放的地址，然后读入client端对应的申请的内存空间中，即前述的数据结构中。
+
+7. client端读入数据后，通过redis的set操作，把数据存入本地redis数据库完成热备份的整个流程
 
 
 
