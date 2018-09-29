@@ -141,15 +141,84 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 | Infiniband Driver | MLNX_OFED_LINUX-4.4-2.0.7.0-ubuntu16.04-x86_64 |
 | Redis             | 4.0.11                                         |
 | Gcc               | 5.4.0                                          |
-| HiRedis           | 4.0.11                                         |
+| hiredis           | Included in redis 4.0.11                       |
 
  在本仓库中，src目录下包括三个目录，其中redis目录中包含修改好配置文件的redis源码；redis-init目录先包含的代码用来初始化redis数据库中的数据；rdma目录中包括client和server两个目录，分别用来在slave和master上运行。
 
+Infiniband驱动程序的安装这里不在叙述。用户需要唯一安装的是插件是hiredis，它是一个C语言的redis客户端，被包含在redis源码中。下面介绍如何安装hiredis。
+
+
+
+
+
 下面介绍如何运行我们提供的代码得到上文中我们描述的结果。我们假设搭建一个master和两个slave的环境继续宁测试。
 
-## 3.1 master初始化
+## 3.1 master-slave集群
 
-下载
+将redis目录下的redis-4.0.11.tar.gz解压，进入redis-4.0.11目录；执行make指令编译redis，然后进入src目录；指定配置文件运行redis-server。
+
+```shell
+tar -zxvf redis-4.0.11.tar.gz
+cd redis-4.0.11
+make
+cd src
+./redis-server ../redis.cfg
+```
+
+另外两台机器也按照同样的方式启动redis-server。
+
+现在假设三台机器按照下面的方式配置：
+
+| Name   | IP            | Port |
+| ------ | ------------- | ---- |
+| master | 192.168.1.100 | 6379 |
+| slave1 | 192.168.1.101 | 6379 |
+| slave2 | 192.168.1.102 | 6379 |
+
+现在设置slave1同步master数据，在数据同步之前应当先对master数据进行初始化，这部分参考3.2小结。首先在master机器打开新的终端进入redis源码src目录，执行redis-cli连接到slave1上。
+
+```shell
+cd redis-4.0.11/src
+./redis-cli -h 192.168.1.101 -p 6379
+```
+
+如果没有发生异常，此时master已经连接到slave1的Redis服务，接下来执行slaveof指令
+
+```shell
+slaveof 192.168.1.100 6379
+```
+
+在master和slave1的redis-server程序输出中可以看到master和slave1数据同步相关的日志，如下所示：
+
+![1](./pic/slave.png)
+
+从日志中可以看到slave从开始执行同步到接收到master所有数据并存储到内存中的时间，根据这些信息我们可以计算出同步的性能。
+
+以上是master与一个slave同步数据数据的过程，多个slave与master同步的过程也类似。
+
+
+
+## 3.2 master数据初始化
+
+我们设计的RDMA数据同步方案更适合于值比较大且数据比较均匀的场景，为了方便计算带宽和比较性能，我们对master的数据进行了初始化。在src目录下的redis-init目录包含了对master数据初始化的代码。
+
+首先进入redis-init目录，然后执行make指令，最后运行redis-init就可以。在redis-init之前，需要确保master上的redis-server程序已经运行起来。
+
+```shell
+cd redis-init
+make
+./redis-init
+```
+
+
+
+
+
+## 3.3 RDMA 数据同步方案
+
+RDMA数据同步方案的代码分为两部分，分别是src目录下的server目录和client目录，server目录的代码在master上运行，client目录的代码在slave上运行。
+
+首先在master上编译安装server模块代码。进入src目录下的
 
 
 
@@ -157,15 +226,11 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
 
 
+~~使用Redis集群方案手动地建立3台Master节点的搭建过程如下：~~
 
+### ~~3.1 在集群模式下创建Redis实例~~
 
-
-
-使用Redis集群方案手动地建立3台Master节点的搭建过程如下：
-
-### 3.1 在集群模式下创建Redis实例
-
-为了创建一个cluster，我们首先要配置Redis server运行在集群模式下。因此可以用以下的配置脚本文件：
+~~为了创建一个cluster，我们首先要配置Redis server运行在集群模式下。因此可以用以下的配置脚本文件：~~
 
 ```shell
 bind 192.168.1.100	#这个参数根据每个Node的IP有所不同
@@ -176,7 +241,7 @@ cluster-node-timeout 5000
 appendonly yes
 ```
 
-然后建立3份编译好的Redis实例拷贝到3个文件夹隔离，并分别按照上述的配置文件启动server：
+~~然后建立3份编译好的Redis实例拷贝到3个文件夹隔离，并分别按照上述的配置文件启动server：~~
 
 ```shell
 mkdir cluster-test
@@ -184,15 +249,15 @@ cd cluster-test
 ./src/redis-server ./cluster.conf	#按照上述配置文件启动server
 ```
 
-### 3.2 用Redis实例建立集群
+### ~~3.2 用Redis实例建立集群~~
 
-通过Redis提供的一个基础程序`redis-trib`可以方便地对集群进行操作，这个程序使用Ruby编写，放置在`src/`中。因此需要安装ruby的开发环境和对应的redis接口。前置准备工作完成后可以通过以下命令建立集群。
+~~通过Redis提供的一个基础程序`redis-trib`可以方便地对集群进行操作，这个程序使用Ruby编写，放置在`src/`中。因此需要安装ruby的开发环境和对应的redis接口。前置准备工作完成后可以通过以下命令建立集群。~~
 
 ```shell
 ./redis-trib.rb create {ip-1}:7000 {ip-2}:7000 {ip-3}:7000
 ```
 
-这样的简单命令只创建了3台Master Node构成的集群，没有任何备份用的Slave Node。
+~~这样的简单命令只创建了3台Master Node构成的集群，没有任何备份用的Slave Node。~~
 
 ## ~~4 Redis集群工作原理简述~~
 
