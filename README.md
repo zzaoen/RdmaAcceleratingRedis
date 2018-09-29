@@ -86,16 +86,18 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
 1. master与slave数据的传输通过RDMA read操作。RDMA read是单边操作，所有的slave可以并行从master内存中读取数据，不会造成网络的竞争；
 2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据；
-3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从
+3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
 
 
 
-使用RDMA进行同步的过程如下：
 
-1. master建立一个mapping table，其结构如图1-3所示。mapping table分为前后两部分，前面部分是一个一个8 byte大小的地址区域，每个区域用来记录地址；后面部分是一个一个4 MB大小的数据区域，用来存放Redis服务器 中的数据。地址区域与数据区域对应存在，第一个地址区域中保存的是第一个数据区域的地址；
-2. 9台slave分别于master建立RDMA连接，在建立连接的过程中，master将mapping table的起始地址发送给每一个slave；
-3. slave根据mapping table的起始地址，加上数据的偏移量计算出数据的地址，slave使用计算出的地址发起RDMA read请求，从master读取一个数据区域数据，并将数据存储到本地；
-4. 如果计算的地址没有越界，继续步骤3；否则，结束。
+
+~~使用RDMA进行同步的过程如下：~~
+
+1. ~~master建立一个mapping table，其结构如图1-3所示。mapping table分为前后两部分，前面部分是一个一个8 byte大小的地址区域，每个区域用来记录地址；后面部分是一个一个4 MB大小的数据区域，用来存放Redis服务器 中的数据。地址区域与数据区域对应存在，第一个地址区域中保存的是第一个数据区域的地址；~~
+2. ~~9台slave分别于master建立RDMA连接，在建立连接的过程中，master将mapping table的起始地址发送给每一个slave；~~
+3. ~~slave根据mapping table的起始地址，加上数据的偏移量计算出数据的地址，slave使用计算出的地址发起RDMA read请求，从master读取一个数据区域数据，并将数据存储到本地；~~
+4. ~~如果计算的地址没有越界，继续步骤3；否则，结束。~~
 
 
 
@@ -121,9 +123,43 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
 
 
-## 3 环境搭建
+## 3 How to run
 
-本文所有的测试工作均在Ubuntu 16.04下完成。
+实验的硬件环境和软件环境如下：
+
+| Hardware          | Configuration                          |
+| ----------------- | -------------------------------------- |
+| CPU               | Intel(R) Core(TM) CPU i7-7700@ 3.60GHz |
+| OS                | Ubuntu 16.04.3 LTS                     |
+| Memory            | 16GB                                   |
+| Disk              | TOSHIBA 1T HDD                         |
+| Switch            | Mellanox MSX1012B-2BFS 40GE QSFP       |
+| Network Interface | Mellanox MCX353A-FCBT 40GbE            |
+
+| Software          | Configuration                                  |
+| ----------------- | ---------------------------------------------- |
+| Infiniband Driver | MLNX_OFED_LINUX-4.4-2.0.7.0-ubuntu16.04-x86_64 |
+| Redis             | 4.0.11                                         |
+| Gcc               | 5.4.0                                          |
+| HiRedis           | 4.0.11                                         |
+
+ 在本仓库中，src目录下包括三个目录，其中redis目录中包含修改好配置文件的redis源码；redis-init目录先包含的代码用来初始化redis数据库中的数据；rdma目录中包括client和server两个目录，分别用来在slave和master上运行。
+
+下面介绍如何运行我们提供的代码得到上文中我们描述的结果。我们假设搭建一个master和两个slave的环境继续宁测试。
+
+## 3.1 master初始化
+
+下载
+
+
+
+
+
+
+
+
+
+
 
 使用Redis集群方案手动地建立3台Master节点的搭建过程如下：
 
@@ -158,48 +194,46 @@ cd cluster-test
 
 这样的简单命令只创建了3台Master Node构成的集群，没有任何备份用的Slave Node。
 
-## 4 Redis集群工作原理简述
+## ~~4 Redis集群工作原理简述~~
 
-Redis cluster是多个Redis实例组成的一个整体，Redis用户只关心他所存储的数据集合，不关心数据在这个集群中是怎么被放置的。Redis cluster具有Master节点互相连接、集群消息通过集群总线通信、节点与节点之间通过二进制协议通信、客户端和集群节点之间通过文本协议进行等特点。
+~~Redis cluster是多个Redis实例组成的一个整体，Redis用户只关心他所存储的数据集合，不关心数据在这个集群中是怎么被放置的。Redis cluster具有Master节点互相连接、集群消息通过集群总线通信、节点与节点之间通过二进制协议通信、客户端和集群节点之间通过文本协议进行等特点。~~
 
-### 4.1 Redis集群分区实现原理
+### ~~4.1 Redis集群分区实现原理~~
 
-Redis cluster中有许多不同编号的slot，这些slot是虚拟的。cluster工作的时候，每个Master节点负责一部分slot，当有某个key映射到某个Master负责的slot后，这个Master负责为这个key提供服务。
+~~Redis cluster中有许多不同编号的slot，这些slot是虚拟的。cluster工作的时候，每个Master节点负责一部分slot，当有某个key映射到某个Master负责的slot后，这个Master负责为这个key提供服务。~~
 
-Master节点维护一个位序列，Master节点用bit来标识对于某个slot是否属于自己管理。在Redis cluster中，我们拥有16384个slot，这个数是固定的，我们存储在Redis cluster中的所有的key都被映射到这些slot中，key到slot的基本映射算法如下：
+~~Master节点维护一个位序列，Master节点用bit来标识对于某个slot是否属于自己管理。在Redis cluster中，我们拥有16384个slot，这个数是固定的，我们存储在Redis cluster中的所有的key都被映射到这些slot中，key到slot的基本映射算法如下：~~
 
 ```shell
 HASH_SLOT = CRC16(key) mod 16384 
 ```
 
-### 4.2 重定向客户端
+### ~~4.2 重定向客户端~~
 
-Redis cluster并不会代理查询，那么如果客户端访问了一个key不存在的节点，那么客户端就会接收到一条信息，告诉客户端想要的slot所在真正的Master node。
-
-
-
-## 5 RDMA网络备份策略
-
-在基于RDMA网络的Redis集群中，假设我们有3台server即3台Master node，分别为server1、server2、server3。同样地，server2和server3是server1的热备份，因此server1的数据通过RDMA网络发送到server2和server3里。
-
-具体的备份过程如下所示：
-
-1. 备份前server1存储的图片均在server1的redis数据库中
-
-2. server启动网络服务，等待client的连接
-
-3. server收到client的请求后，通过get操作查询redis数据库，并获取编码后的图片信息
-
-4. server将查询的图片编码信息存入申请好的内存空间内，这一段内存空间的结构如下所示。第一个段是标志位序列，用来标记哪些图片是最新修改的。第二个段是存储图片编码的数据块，以数组方式组织，每个数据块的大小是4MB。
-
-   ![1](./pic/data-table-structure.png)
-
-5. server将上述数据结构的首地址通过`ibv_post_send`操作以工作请求的方式放到发送队列，由RDMA网络发送给client
-
-6. client端收到图片数据存放的首地址信息后，通过标志位查询哪些图片数据是修改后还没commit的，然后将所有修改的数据块读入。读入的操作是通过`ibv_post_send`操作，计算Addr和Flag标志位产生的偏移量，得到修改后数据存放的地址，然后读入client端对应的申请的内存空间中，即前述的数据结构中。
-
-7. client端读入数据后，通过redis的set操作，把数据存入本地redis数据库完成热备份的整个流程
+~~Redis cluster并不会代理查询，那么如果客户端访问了一个key不存在的节点，那么客户端就会接收到一条信息，告诉客户端想要的slot所在真正的Master node。~~
 
 
 
-## 6 实验结果
+## ~~5 RDMA网络备份策略~~
+
+~~在基于RDMA网络的Redis集群中，假设我们有3台server即3台Master node，分别为server1、server2、server3。同样地，server2和server3是server1的热备份，因此server1的数据通过RDMA网络发送到server2和server3里。~~
+
+~~具体的备份过程如下所示：~~
+
+1. ~~备份前server1存储的图片均在server1的redis数据库中~~
+
+2. ~~server启动网络服务，等待client的连接~~
+
+3. ~~server收到client的请求后，通过get操作查询redis数据库，并获取编码后的图片信息~~
+
+4. ~~server将查询的图片编码信息存入申请好的内存空间内，这一段内存空间的结构如下所示。第一个段是标志位序列，用来标记哪些图片是最新修改的。第二个段是存储图片编码的数据块，以数组方式组织，每个数据块的大小是4MB。~~
+
+5. ~~server将上述数据结构的首地址通过`ibv_post_send`操作以工作请求的方式放到发送队列，由RDMA网络发送给client~~
+
+6. ~~client端收到图片数据存放的首地址信息后，通过标志位查询哪些图片数据是修改后还没commit的，然后将所有修改的数据块读入。读入的操作是通过`ibv_post_send`操作，计算Addr和Flag标志位产生的偏移量，得到修改后数据存放的地址，然后读入client端对应的申请的内存空间中，即前述的数据结构中。~~
+
+7. ~~client端读入数据后，通过redis的set操作，把数据存入本地redis数据库完成热备份的整个流程~~
+
+
+
+## ~~6 实验结果~~
