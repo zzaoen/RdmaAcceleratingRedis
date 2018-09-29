@@ -27,27 +27,13 @@ RDMA permits high-throughout, low-latency networking, which is especially useful
 | two            | 174.3                    | 2.7                    |
 | three          | 259.89                   | 3.33                   |
 
-## 2 Redis Cluster Plus
+## 2 Redis Master-Slave Solution
 
-As mentioned above, we designed a new Redis server cluster called RCP. When the RCP cluster is initialized, all the data stored on the master is synchronized to all the slave machines in the cluster. Suppose now that there is a Redis server that stores more than 10,000 images encoded by base64. These 10,000 images are offline. Now we want to build the RCP with 10 machines getting better performance by more available servers. How to synchronize the data from the master node to another 9 slave nodes is a challenge problem.
+We implemented the Redis master-slave synchronization solution through RDMA, and the main reasons for the performance improvement are:
 
-Suppose we use the traditional TCP/IP communication, the synchronization step is as follows:
-
-1. 9 slaves establish a TCP connection with the master respectively;
-2. The master node reads a key-value pair from the local, and sends it to 9 slaves in sequence through the socket;
-3. After receiving the key-value, the slave saves it to the local Redis database.
-4. If the master has not been traversed, continue with step 2; otherwise stop.
-
-The way TCP/IP looks simple, but in practice the performance is very low, we found that this synchronization method takes a long time to test. First, the TCP/IP network itself has data transmission and protocol stack overhead; Second, multi-client communicates at the same time, the master node network is highly competitive; Third, the synchronous operation cannot be completely asynchronous. In addition to the time overhead, during synchronization, the CPU load on the master machine is very high, affecting other loads running on the master itself.
-
-We used RDMA to design a cluster synchronization scheme. Experiments show that our synchronization scheme can improve performance by 4 times compared with TCP/IP synchronization. The more slaves a cluster needs to synchronize, the more obvious the advantage of our synchronization scheme is because We use RDMA unilateral operation, and all slaves read data from the master in parallel. The process of synchronizing using RDMA is as follows:
-
-1. The master creates a mapping table whose structure is shown in Figure 1-3. The mapping table is divided into two parts. The front part is an 8-byte address area, each area is used to record the address; the latter part is a 4 MB data area for storing data in the Redis server. The address area corresponds to the data area, and the address of the first data area is stored in the first address area;
-2. 9 slaves establish an RDMA connection with the master respectively. During the process of establishing the connection, the master sends the starting address of the mapping table to each slave;
-3. The slave calculates the address of the data according to the starting address of the mapping table and the offset of the data. The slave uses the calculated address to initiate an RDMA read request, reads a data area data from the master, and stores the data locally. ;
-4. If the calculated address does not cross the boundary, continue with step 3; otherwise, end the process.
-
-![1](./pic/data-table-structure.png)
+1. The data transfer between master and slave is via RDMA read. RDMA read is a one-side operation, all slaves can read data from the master memory in parallel, without causing network competition.
+2. The master's data does not be written to disk. The master creates a mapping table in the memory. The mapping table is composed of consecutive fixed-size data areas. The master maps the key-value stored in the memory to the mapping table, and the slave obtains data from the mapping table.
+3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read.
 
 ## 3 Building Environment
 
