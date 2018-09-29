@@ -88,38 +88,9 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据；
 3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
 
-
-
-
-
-~~使用RDMA进行同步的过程如下：~~
-
-1. ~~master建立一个mapping table，其结构如图1-3所示。mapping table分为前后两部分，前面部分是一个一个8 byte大小的地址区域，每个区域用来记录地址；后面部分是一个一个4 MB大小的数据区域，用来存放Redis服务器 中的数据。地址区域与数据区域对应存在，第一个地址区域中保存的是第一个数据区域的地址；~~
-2. ~~9台slave分别于master建立RDMA连接，在建立连接的过程中，master将mapping table的起始地址发送给每一个slave；~~
-3. ~~slave根据mapping table的起始地址，加上数据的偏移量计算出数据的地址，slave使用计算出的地址发起RDMA read请求，从master读取一个数据区域数据，并将数据存储到本地；~~
-4. ~~如果计算的地址没有越界，继续步骤3；否则，结束。~~
-
-
-
-
-
 ![1](./pic/data-table-structure.png) 
 
 图1-3 mapping table结构
-
-
-
-
-
-~~作为对比，我们可以先看看基于Socket的集群备份策略是如何实现的。~~
-
-~~现在假设我们有3台Redis服务器，分别为server1、server2和server3，其中server1已经存储了许多图片缓存，我们希望将server2和server3作为server1的热备份，使用Socket将server1中所有的键值对信息发送给server2和server3，并让server2和server3把收到的数据存储在自己的内存中。具体流程如下：~~
-
-1. ~~server2和server3分别于server1建立Socket连接；~~
-2. ~~server1遍历本地Redis库，使用get得到数据，将得到的键值信息依次发送给server2和server3；~~
-3. ~~server2和server3收到数据，分别执行set将数据插入到本地的Redis库中。~~
-
-~~第2步是耗时操作，~~
 
 
 
@@ -130,7 +101,6 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 | Hardware          | Configuration                          |
 | ----------------- | -------------------------------------- |
 | CPU               | Intel(R) Core(TM) CPU i7-7700@ 3.60GHz |
-| OS                | Ubuntu 16.04.3 LTS                     |
 | Memory            | 16GB                                   |
 | Disk              | TOSHIBA 1T HDD                         |
 | Switch            | Mellanox MSX1012B-2BFS 40GE QSFP       |
@@ -138,6 +108,7 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
 | Software          | Configuration                                  |
 | ----------------- | ---------------------------------------------- |
+| OS                | Ubuntu 16.04.3 LTS                             |
 | Infiniband Driver | MLNX_OFED_LINUX-4.4-2.0.7.0-ubuntu16.04-x86_64 |
 | Redis             | 4.0.11                                         |
 | Gcc               | 5.4.0                                          |
@@ -145,20 +116,31 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
  在本仓库中，src目录下包括三个目录，其中redis目录中包含修改好配置文件的redis源码；redis-init目录先包含的代码用来初始化redis数据库中的数据；rdma目录中包括client和server两个目录，分别用来在slave和master上运行。
 
-Infiniband驱动程序的安装这里不在叙述。用户需要唯一安装的是插件是hiredis，它是一个C语言的redis客户端，被包含在redis源码中。下面介绍如何安装hiredis。
-
-
-
-
-
-下面介绍如何运行我们提供的代码得到上文中我们描述的结果。我们假设搭建一个master和两个slave的环境继续宁测试。
-
-## 3.1 master-slave集群
-
-将redis目录下的redis-4.0.11.tar.gz解压，进入redis-4.0.11目录；执行make指令编译redis，然后进入src目录；指定配置文件运行redis-server。
+Infiniband驱动程序的安装这里不在叙述。用户需要唯一安装的是插件是hiredis，它是一个C语言的redis客户端库，被包含在redis源码中。下面介绍如何安装hiredis。用户需要解压redis目录下的redis-4.0.11.tar.gz，然后进入deps/hiredis目录下编译，安装。
 
 ```shell
 tar -zxvf redis-4.0.11.tar.gz
+cd redis-4.0.11/deps/hiredis/
+make 
+sudo make install
+```
+
+安装完成之后在当前目录会生成一个名字为libhiredis.so的文件，将该文件拷贝到/usr/lib64，然后更新动态链接库缓存。
+
+```shell
+sudo cp libhiredis.so /usr/lib64
+sudo /sbin/ldconfig
+```
+
+到这里，hiredis就安装成功了，我们可以在C语言代码中中使用hiredis头文件就可以操作Redis了。
+
+下面介绍如何运行我们提供的代码得到上文中我们描述的结果。我们假设搭建一个master和两个slave的环境继续宁测试。
+
+### 3.1 master-slave集群
+
+进入redis-4.0.11目录；执行make指令编译redis，然后进入src目录；指定配置文件运行redis-server。
+
+```shell
 cd redis-4.0.11
 make
 cd src
@@ -196,9 +178,7 @@ slaveof 192.168.1.100 6379
 
 以上是master与一个slave同步数据数据的过程，多个slave与master同步的过程也类似。
 
-
-
-## 3.2 master数据初始化
+### 3.2 master数据初始化
 
 我们设计的RDMA数据同步方案更适合于值比较大且数据比较均匀的场景，为了方便计算带宽和比较性能，我们对master的数据进行了初始化。在src目录下的redis-init目录包含了对master数据初始化的代码。
 
@@ -212,93 +192,32 @@ make
 
 
 
+### 3.3 RDMA 数据同步方案
 
+RDMA数据同步方案的代码分为两部分，分别是src/rdma目录下的server目录和client目录，server目录的代码在master上运行，client目录的代码在slave上运行。
 
-## 3.3 RDMA 数据同步方案
-
-RDMA数据同步方案的代码分为两部分，分别是src目录下的server目录和client目录，server目录的代码在master上运行，client目录的代码在slave上运行。
-
-首先在master上编译安装server模块代码。进入src目录下的
-
-
-
-
-
-
-
-~~使用Redis集群方案手动地建立3台Master节点的搭建过程如下：~~
-
-### ~~3.1 在集群模式下创建Redis实例~~
-
-~~为了创建一个cluster，我们首先要配置Redis server运行在集群模式下。因此可以用以下的配置脚本文件：~~
+首先在master上编译安装server目录下的代码。进入src目录下的server目录，编译代码并在master运行rdma-server程序。
 
 ```shell
-bind 192.168.1.100	#这个参数根据每个Node的IP有所不同
-port 7000
-cluster-enabled yes	#启用集群模式
-cluster-config-file nodes.conf
-cluster-node-timeout 5000
-appendonly yes
+cd rdma/server
+make
+./rdma-server
 ```
 
-~~然后建立3份编译好的Redis实例拷贝到3个文件夹隔离，并分别按照上述的配置文件启动server：~~
+在rdma-server的代码中，我们固定了程序绑定的端口是12345。
 
-```shell
-mkdir cluster-test
-cd cluster-test
-./src/redis-server ./cluster.conf	#按照上述配置文件启动server
+rdma-server程序启动后会利用hiredis访问master上Redis服务器中的存放的key-value数据并在内存中建立mapping table。
+
+
+
+在slave上编译安装client目录下的代码。进入src目录下的client目录，编译代码并在slave上运行rdma-client程序。
+
+```
+cd rdma/client
+make
+./rdma-client 192.168.0.100 12345
 ```
 
-### ~~3.2 用Redis实例建立集群~~
+rdma-client在运行的时候指定了rdma-server的IP地址和端口，程序运行起来之后，客户端根据master返回mapping table的首地址计算读取数据的地址，发起RDMA read单边请求，直接从master内存读取数据。读取的数据加入到本地的Redist数据库。
 
-~~通过Redis提供的一个基础程序`redis-trib`可以方便地对集群进行操作，这个程序使用Ruby编写，放置在`src/`中。因此需要安装ruby的开发环境和对应的redis接口。前置准备工作完成后可以通过以下命令建立集群。~~
-
-```shell
-./redis-trib.rb create {ip-1}:7000 {ip-2}:7000 {ip-3}:7000
-```
-
-~~这样的简单命令只创建了3台Master Node构成的集群，没有任何备份用的Slave Node。~~
-
-## ~~4 Redis集群工作原理简述~~
-
-~~Redis cluster是多个Redis实例组成的一个整体，Redis用户只关心他所存储的数据集合，不关心数据在这个集群中是怎么被放置的。Redis cluster具有Master节点互相连接、集群消息通过集群总线通信、节点与节点之间通过二进制协议通信、客户端和集群节点之间通过文本协议进行等特点。~~
-
-### ~~4.1 Redis集群分区实现原理~~
-
-~~Redis cluster中有许多不同编号的slot，这些slot是虚拟的。cluster工作的时候，每个Master节点负责一部分slot，当有某个key映射到某个Master负责的slot后，这个Master负责为这个key提供服务。~~
-
-~~Master节点维护一个位序列，Master节点用bit来标识对于某个slot是否属于自己管理。在Redis cluster中，我们拥有16384个slot，这个数是固定的，我们存储在Redis cluster中的所有的key都被映射到这些slot中，key到slot的基本映射算法如下：~~
-
-```shell
-HASH_SLOT = CRC16(key) mod 16384 
-```
-
-### ~~4.2 重定向客户端~~
-
-~~Redis cluster并不会代理查询，那么如果客户端访问了一个key不存在的节点，那么客户端就会接收到一条信息，告诉客户端想要的slot所在真正的Master node。~~
-
-
-
-## ~~5 RDMA网络备份策略~~
-
-~~在基于RDMA网络的Redis集群中，假设我们有3台server即3台Master node，分别为server1、server2、server3。同样地，server2和server3是server1的热备份，因此server1的数据通过RDMA网络发送到server2和server3里。~~
-
-~~具体的备份过程如下所示：~~
-
-1. ~~备份前server1存储的图片均在server1的redis数据库中~~
-
-2. ~~server启动网络服务，等待client的连接~~
-
-3. ~~server收到client的请求后，通过get操作查询redis数据库，并获取编码后的图片信息~~
-
-4. ~~server将查询的图片编码信息存入申请好的内存空间内，这一段内存空间的结构如下所示。第一个段是标志位序列，用来标记哪些图片是最新修改的。第二个段是存储图片编码的数据块，以数组方式组织，每个数据块的大小是4MB。~~
-
-5. ~~server将上述数据结构的首地址通过`ibv_post_send`操作以工作请求的方式放到发送队列，由RDMA网络发送给client~~
-
-6. ~~client端收到图片数据存放的首地址信息后，通过标志位查询哪些图片数据是修改后还没commit的，然后将所有修改的数据块读入。读入的操作是通过`ibv_post_send`操作，计算Addr和Flag标志位产生的偏移量，得到修改后数据存放的地址，然后读入client端对应的申请的内存空间中，即前述的数据结构中。~~
-
-7. ~~client端读入数据后，通过redis的set操作，把数据存入本地redis数据库完成热备份的整个流程~~
-
-
-
-## ~~6 实验结果~~
+所有的slave都按照上面的指令运行就可以与master同步获取所有的数据。
