@@ -2,6 +2,33 @@
 
 ## 1 背景
 
+Redis提供了主从策略，在配置文件中指定slaveof配置项或者在redis-cli中执行slaveof指令，就可以构建master-slave模式的Redis服务。下表1-1是我们为一个具有1GB图片缓冲Redis服务器分别构建一个slave和两个slave的耗时情况。
+
+表1-1 Redis构建slave的耗时情况
+
+| Slave number | Time consuming(s) | Bandwidth(MB/s) |
+| ------------ | ----------------- | --------------- |
+| one          | 98                | 10.4            |
+| two          | 174.3             | 5.87            |
+| three        | 259.89            | 3.94            |
+
+Redis主从策略的机制是：master收到slave的同步请求后，将内存中所有的key-value写入本地磁盘中，随后master启动一个线程将文件发送给slave，slave接收到文件再读取写入内存。这样，master和slave就拥有了完全一致的数据，不过在master-slave模式下，slave是只读的，只有master可以接收写。
+
+表1-1的结果是master只有1GB的数据时，slave同请求同步到结束的耗时情况。我们相信，当数据量更多以及更多的slave同时请求作为slave时，master-slave模式的性能更差，主要原因如下：
+
+1. master将内存中所有的数据先写入磁盘，然后通过网络发送。数据被写入磁盘，发送时再从磁盘读取，数据拷贝次数很多，同时磁盘的读写性能也是非常差的；
+
+2. 多个slave请求同步的时候，数据都通过TCP网络传输，TCP网络本身开销很大，当出现竞争的时候性能会更差。
+
+
+我们觉得使用RDMA实现master-slave模式可以极大的提高性能，实验的结果表明，我们使用RDMA实现的master-slave模式比Redis自带的master-slave模式性能可以提升35倍-80倍，结果如图1-1所示。
+
+
+
+
+
+
+
 Redis本身自带了集群实现方案，通过修改Redis中的配置文件并执行脚本可以将几台独立的Redis服务器组合成一个集群对外提供服务。我们可以集群模式运行redis-cli，或者在其他语言中使用Redis的API接口编写客户端访问Redis集群（比如Jedis），当我们执行set命令向集群中添加一对键值时，程序将这对键值存放在集群的其中一台服务上，也就是说执行set时，这对key-value在系统中只存在一份，即使集群启动的时候指定采用副本，那么一对key-value也只存放在一台Redis服务器和这台服务器对应的副本机器上；当我们执行get命令从集群获取一个key对应的值时，程序帮我们找到这个key所在Redis服务器的，并将value返回给客户端。如图1-1所示：
 
 ![](./pic/redis-cluster-origin.jpg)
