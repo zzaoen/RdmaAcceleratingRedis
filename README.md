@@ -21,13 +21,21 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 2. 多个slave请求同步的时候，数据都通过TCP网络传输，TCP网络本身开销很大，当出现竞争的时候性能会更差。
 
 
-我们觉得使用RDMA实现master-slave模式可以极大的提高性能，实验的结果表明，我们使用RDMA实现的master-slave模式比Redis自带的master-slave模式性能可以提升35倍-80倍，结果表1-1所示。
+我们认为使用RDMA实现master-slave模式可以极大的提高性能，实验的结果表明，我们使用RDMA实现的master-slave模式比Redis自带的master-slave模式性能可以提升35倍-80倍，结果表1-2所示。
+
+表1-2 Redis自带master-slave模式与RDMA实现时间对比
 
 | Slave   number | Origin Time-consuming(s) | RDMA Time-consuming(s) |
 | -------------- | ------------------------ | ---------------------- |
 | one            | 98                       | 2.8                    |
 | two            | 174.3                    | 2.7                    |
 | three          | 259.89                   | 3.33                   |
+
+
+
+
+
+
 
 
 
@@ -61,18 +69,28 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 
 ## 2 RDMA master-slave实现方案
 
-上面说到我们设计新的Redis服务器集群RCP，在RCP集群初始化的时候，master上存储的所有数据同步到集群中所有的slave机器上。假设现在有一台Redis服务器上存储了超过10000张大小为4MB的图片base64编码，这10000张图片是离线计算得到的热门图片，现在想将这台Redis服务器作为master建立一个有10台机器的RCP集群以对外提供服务得到更好的性能。如何将master上的数据同步到另外9台Redis服务器是一个大问题。
+~~上面说到我们设计新的Redis服务器集群RCP，在RCP集群初始化的时候，master上存储的所有数据同步到集群中所有的slave机器上。假设现在有一台Redis服务器上存储了超过10000张大小为4MB的图片base64编码，这10000张图片是离线计算得到的热门图片，现在想将这台Redis服务器作为master建立一个有10台机器的RCP集群以对外提供服务得到更好的性能。如何将master上的数据同步到另外9台Redis服务器是一个大问题。~~
 
-假设我们采用传统的TCP/IP通信方式，那么同步的过程大概如下：
+~~假设我们采用传统的TCP/IP通信方式，那么同步的过程大概如下：~~
 
-1. 9台slave分别于master建立TCP连接；
-2. master从本地读取一个key-value对，通过socket依次发送给9台slave；
-3. slave接收到key-value后将其存到本地的库中；
-4. 如果master没有被遍历完，继续步骤2；否则停止。
+1. ~~9台slave分别于master建立TCP连接；~~
+2. ~~master从本地读取一个key-value对，通过socket依次发送给9台slave；~~
+3. ~~slave接收到key-value后将其存到本地的库中；~~
+4. ~~如果master没有被遍历完，继续步骤2；否则停止。~~
 
-TCP/IP的方式看起来简单，但是实际上性能很差，我们在测试的时候发现这样的同步方式需要相当长的时间。第一，TCP/IP网络本身数据拷贝和协议栈的开销；第二多客户端同时通信，master网络竞争激烈；第三，同步操作无法完全异步。除了时间开销之外，在同步的时候，master机器的CPU负载非常高，对master本身运行的其他负载会有影响。
+~~TCP/IP的方式看起来简单，但是实际上性能很差，我们在测试的时候发现这样的同步方式需要相当长的时间。第一，TCP/IP网络本身数据拷贝和协议栈的开销；第二多客户端同时通信，master网络竞争激烈；第三，同步操作无法完全异步。除了时间开销之外，在同步的时候，master机器的CPU负载非常高，对master本身运行的其他负载会有影响。~~
 
-我们使用RDMA设计了集群同步的方案，实验表明，我们的同步方案与TCP/IP同步相比，在性能上能提升4倍，集群需要同步的slave越多，我们的同步方案优势越明显，因为我们利用RDMA单边操作，所有的slave并行的从master读取数据。使用RDMA进行同步的过程如下：
+~~我们使用RDMA设计了集群同步的方案，实验表明，我们的同步方案与TCP/IP同步相比，在性能上能提升4倍，集群需要同步的slave越多，我们的同步方案优势越明显，因为我们利用RDMA单边操作，所有的slave并行的从master读取数据。~~
+
+我们利用RDMA实现Redis master-slave同步方案，性能可以得到很大提升的主要原因是：
+
+1. master与slave数据的传输通过RDMA read操作。RDMA read是单边操作，所有的slave可以并行从master内存中读取数据，不会造成网络的竞争；
+2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据；
+3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从
+
+
+
+使用RDMA进行同步的过程如下：
 
 1. master建立一个mapping table，其结构如图1-3所示。mapping table分为前后两部分，前面部分是一个一个8 byte大小的地址区域，每个区域用来记录地址；后面部分是一个一个4 MB大小的数据区域，用来存放Redis服务器 中的数据。地址区域与数据区域对应存在，第一个地址区域中保存的是第一个数据区域的地址；
 2. 9台slave分别于master建立RDMA连接，在建立连接的过程中，master将mapping table的起始地址发送给每一个slave；
