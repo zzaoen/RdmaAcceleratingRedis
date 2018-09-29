@@ -208,8 +208,6 @@ make
 
 rdma-server程序启动后会利用hiredis访问master上Redis服务器中的存放的key-value数据并在内存中建立mapping table。
 
-
-
 在slave上编译安装client目录下的代码。进入src目录下的client目录，编译代码并在slave上运行rdma-client程序。
 
 ```
