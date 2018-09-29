@@ -2,20 +2,30 @@
 
 ## 1 Introduction
 
-In scenes where images are frequently accessed, such as accessing online galleries on social software. The images are stored on the disks of the servers. When clients want to access the image, the server needs read it to the memory and sent it to the client. Putting the images into NoSQL in main memory is a emerging scheme used to accelerate the access. Based on this background, the strategy of Redis as the image buffer is to convert the image into base64 code and store it in the Redis cluster.
+There is a very simple to use and configure leader follower (master slave) replication because Master-Slave strategy is supported in Redis. It is easy to enable Master-Slave mode in Redis service by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Table 1-1 shows the time consuming situation for building a different number of slaves for  a Redis server with a 1GB image buffer.
 
-Redis itself comes with a official solution of providing cluster. By modifying the configuration text files in Redis and executing scripts, several independent Redis servers can be combined into one cluster to provide external services. By the way, traditional implement of redis cluster requires two TCP connections open. We can run `src/redis-cli`in cluster mode, or use other user-friendly client such as Jedis. When we execute `set` command to add a pair of key values to the cluster, redis will store the key-value into one server of the cluster. In other words, only one server have the value. Redis cluster does not use consistent hashing, but a different form of sharding where every key is conceptually part of what we call an hash slot. So Even if the cluster is configured to enable replication, then a pair of key-value is only stored in the Master node and Slave node. When we execute `get` command, redis will automatically return the value from the node it stored in fact as showed in the figure below.
+Table 1-1 Time consuming situation of building slaves
 
-![](./pic/redis-cluster-origin.jpg)
+| Slave number | Time consuming(s) | Bandwidth(MB/s) |
+| ------------ | ----------------- | --------------- |
+| one          | 98                | 10.4            |
+| two          | 174.3             | 5.87            |
+| three        | 259.89            | 3.94            |
 
-However, Redis cluster also pose unique challenges such as performance and overload:
+**The mechanism of the Redis Master-Slave policy:** Master writes all the pairs of Key-Value in the memory into the local disk after receiving the synchronization request from the slave. Then master starts a thread to send the file to the slave, and the slave receives the file and then writes into the memory. In this way, the master and the slave have have exactly the same data, but in the master-slave mode, the slave is read-only, and only the master can receive the write request.
 
-1. Regardless of the number of machines in the cluster, just one pair of key-value exists in the cluster system. In some application scenarios, a small set of data is frequently accessed by a large number of clients and this will overload the server. The traditional solution only increases the capacity of cluster but reduces performance when overload access to hotpot dataset happened.
-2. The Redis service is single-thread modal, which means that the Redis server can only serve the requests in a sequence order. The Redis client connects to only one Redis server in the cluster. If the key of the request is not found in the peer Redis server, the Redis server is responsible for searching the destination server and return the ip address and port to the client. Then the client can get data from the correct server node. In some application scenarios, some clients may initiate a `get` request for one or several keys at the same time. All requests end up waiting for the same server to return results, increasing the delay and then overwhelmed the single server.
+The result in Table 1-1 is the time-consuming situation in which the slave synchronizes to the end of the request with only 1 GB of data. It demonstrates that when the amount of data is more and more slaves are simultaneously requesting as slaves, the performance of the master-slave mode is even worse. The main reasons are as follows:
 
-![](./pic/redis-cluster-plus.jpg)
+1. The master writes all the data in memory to the local disk first, and then sends it through the network. The data is written to the disk, and then read from the disk when sent so I/O operation induces large overhead, and the read and write performance of the disk is also very poor.
+2. When multiple slave requests are synchronized, the data is transmitted over the TCP network. The TCP network induces a large overhead, and performance will be worse when there is competition.
 
-In order to solve the above problems, we propose a hot backup scheme for cluster called RCP (Redis Cluster Plus). In RCP, the data stored on each Redis server is same so that client can get the value fast without redirection. Each Redis server in the entire cluster can provide service independently. When a large number of clients access the RCP cluster, the requests are distributed among all the clusters. 
+RDMA permits high-throughout, low-latency networking, which is especially useful in massively parallel computer clusters. Therefore, implementing the master-slave mode through RDMA can greatly improve performance. The experimental results show that the master-slave mode implemented by RDMA is 35 times-80 times better than the master-slave mode implemented by TCP. Table 1-2 shows the results.
+
+| Slave   number | Origin Time-consuming(s) | RDMA Time-consuming(s) |
+| -------------- | ------------------------ | ---------------------- |
+| one            | 98                       | 2.8                    |
+| two            | 174.3                    | 2.7                    |
+| three          | 259.89                   | 3.33                   |
 
 ## 2 Redis Cluster Plus
 
