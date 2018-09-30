@@ -11,6 +11,7 @@
 #include <hiredis/hiredis.h>
 
 #define ARR_LEN 1024 * 1024 * 4
+#define KEY_COUNT 255
 
 // char buf[ARR_LEN]; 
 // char *s = buf;
@@ -37,8 +38,8 @@ struct context {
 };
 
 const int TIMEOUT_IN_MS = 500; /* ms */
-const int data_size = 1024*1024*1024;// * 1024 * 1024; /*1GB*/
-const int block_size = 1024*1024*4;
+const int data_size = 1024 * 1024 * 1024;// * 1024 * 1024; /*1GB*/
+const int block_size = 1024 * 1024 * 4;
 const int max_mapping_table_size = 256 * 8;
 int now_mapping_table_num = 0;
 int need_mapping_table_num = 0;
@@ -120,13 +121,6 @@ int max_pri(long num) {
 }
 
 void create_offset() {
-  /*offset_num = max_pri(data_size / block_size);
-  offset = (unsigned long *)malloc(sizeof(unsigned long) * offset_num);
-  for(long i = 0; i < offset_num; i++){
-    add+=step;
-    while(add >= offset_num) add-=offset_num;
-    offset[i] = add;
-  }*/
   offset_num = data_size / block_size;
   offset = (unsigned long *)malloc(sizeof(unsigned long) * offset_num);
   for(long i = 0; i < offset_num; i++) {
@@ -437,10 +431,6 @@ void post_send_rdma_read_data(struct connection_client *conn,int offset)
 
 void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
 {
-
-  // redisContext* redis_conn = redisConnect("127.0.0.1", 6379);  
-  // if(redis_conn->err)   printf("connection error:%s\n", redis_conn->errstr); 
-
   struct connection_client *conn = (struct connection_client *)(uintptr_t)wc->wr_id;
 
   if(wc->status != IBV_WC_SUCCESS) 
@@ -448,15 +438,9 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
 
   if (wc->opcode & IBV_WC_RECV) {
     if(conn->recv_msg->type == MSG_MAPPING_TABLE_ADD){
-      //printf("recv mapping table address success\n");
       memcpy(&conn->server_mr, &conn->recv_msg->data.mr, sizeof(conn->server_mr));
-      //printf("add of mapping table add:%p\n\n",conn->server_mr.addr);
-      
       read_mapping_table_start[recv_mapping_table_count] = get_cycles();
       start =  get_cycles();
-
-      // time_start = clock();
-
       post_send_rdma_read_mp(conn);
       conn->client_state = CS_READ_TABLE;
     }
@@ -468,11 +452,8 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
     if(conn->client_state == CS_READ_TABLE) {
       printf("rdma read number %d mapping table success\n",now_mapping_table_num+1);
       conn->client_state = CS_HAS_TABLE;
-      //printf("read table comp\n");
-      //print
       unsigned long *p = (unsigned long *)conn->rdma_local_region;
       for(int i = 0; i < max_mapping_table_size / 8; i++) {
-        //printf("i:%d,addr:%p,contents:%lx\n", now_mapping_table_num * (max_mapping_table_size / 8) + i, (void *)p, *p);
         p++;
       }
     }
@@ -484,9 +465,6 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
       conn->client_state = CS_HAS_DATA;
     }
     if(conn->client_state == CS_HAS_DATA) {
-      /*print*/
-      //printf("rdma read offset %ld data success,read from add:%lx\n",offset[k],*((unsigned long *)conn->rdma_local_region + offset[k]));
-      //char *s=conn->rdma_local_region + max_mapping_table_size + k * block_size;
       char *s=(char *)malloc(ARR_LEN);
       int i = ARR_LEN;
       int j = 0;
@@ -496,20 +474,12 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
         s[j]=(unsigned char)*((dis + j));
         j++;
       }
-      //printf("-------%s\n",s);
-      // redisContext* redis_conn = redisConnect("127.0.0.1", 6379);  
-      // if(redis_conn->err)   printf("connection error:%s\n", redis_conn->errstr); 
-
       redisCommand(redis_conn, "set %d %s", k, s); 
-     
-      
-      if(k < 255) {
-
+      if(k < KEY_COUNT) {
         k++;
         post_send_rdma_read_data(conn,offset[k]);
         conn->client_state = CS_HAS_DATA;
-      }
- else{
+      } else{
         time_end = clock();
         double duration = (double)(time_end - time_start) / CLOCKS_PER_SEC;
         printf("\nread done\n");
@@ -518,12 +488,11 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
         cycles_to_units = get_cpu_mhz(0) * 1000000;
         sum_of_test_cycles = (double)(end - start);
         double bw_avg = ((double)((data_size) * cycles_to_units) / (sum_of_test_cycles * 0x100000));
-        printf("\ntime:%fs\n", duration);
+        printf("\nall data received, duration: %fs\n", duration);
         printf("\ncpu time : %lf, cpu frequency : %lf hz\nbandwidth : %lf MB/s\n", sum_of_test_cycles, cycles_to_units, bw_avg);
         destroy_connection_client(conn);
-exit(-1);
+        exit(-1);
       }
-      
     }
   }
 }
@@ -534,7 +503,6 @@ void *poll_cq(void *context)
   struct ibv_wc wc;
   redisContext* redis_conn = redisConnect("127.0.0.1", 6379);  
   if(redis_conn->err)   printf("connection error:%s\n", redis_conn->errstr); 
-
   while(1) {
     TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &context));
     ibv_ack_cq_events(cq, 1);
@@ -543,6 +511,5 @@ void *poll_cq(void *context)
     while(ibv_poll_cq(cq, 1, &wc))
      on_completion_client(&wc, redis_conn);
     }
-
   return NULL;
 }

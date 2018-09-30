@@ -6,6 +6,7 @@
 #include <rdma/rdma_cma.h>
 #include <sys/stat.h>  
 #include <hiredis/hiredis.h>
+
 const char *DEFAULT_PORT = "12345";
 struct message {
   enum {
@@ -59,8 +60,8 @@ void send_mapping_table_add(struct connection_server *conn,unsigned long offset)
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
-const int data_size = 1024*1024*1024;// * 1024 * 1024; /*1GB*/
-const int block_size = 1024*1024*4;
+const int data_size = 1024 * 1024 * 1024;// * 1024 * 1024; /*1GB*/
+const int block_size = 1024 * 1024 * 4;
 //const int max_mapping_table_size = 4096;
 
 static struct context *s_ctx = NULL;
@@ -341,9 +342,6 @@ void on_completion_server(struct ibv_wc *wc)
     }
   } else {
     printf("send mmaping table address success\n");
-
-    //start a new loop
-    //post_recv_send_mapp_add(conn);
   }
   
 }

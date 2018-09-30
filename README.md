@@ -29,19 +29,23 @@ Table 1-2 Comparison of TCP and RDMA for Master-Slave
 | two            | 174.3                    | 2.7                    |
 | three          | 259.89                   | 3.33                   |
 
-## 2 Redis Master-Slave Solution
+## 2 RDMA Master-Slave Solution
 
-We implemented the Redis master-slave synchronization solution through RDMA, and the main reasons for the performance improvement are:
+We implemented an master-slave synchronization solution by using RDMA, and the main reasons for the performance improvement are as follows:
 
 1. The data transfer between master and slave is via RDMA read. RDMA read is a one-side operation, all slaves can read data from the master memory in parallel, without causing network competition.
 2. The master's data does not be written to disk. The master creates a mapping table in the memory. The mapping table is composed of consecutive fixed-size data areas. The master maps the key-value stored in the memory to the mapping table, and the slave obtains data from the mapping table.
-3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read.
+3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read. Figure 1-2 shows the detailed process.
 
-Figure 1-2 Slave backup data from Master using Mapping Table
+
 
 ![1](./pic/communication.png)
 
-The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. Figure 1-3 shows the bandwidth comparison for master-slave mode between TCP and RDMA. Figure 1-4 shows the data synchronization of the two modes for the system.
+Figure 1-2 Master-slave using RDMA and Mapping Table
+
+
+
+The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. Figure 1-3 shows the bandwidth comparison for master-slave mode between TCP and RDMA. 
 
 ![1](pic/bandwidth.png)
 
