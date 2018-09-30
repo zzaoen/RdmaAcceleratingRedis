@@ -482,7 +482,7 @@ void on_completion_client(struct ibv_wc *wc, redisContext* redis_conn)
       } else{
         time_end = clock();
         double duration = (double)(time_end - time_start) / CLOCKS_PER_SEC;
-        printf("\nread done\n");
+        //printf("\nread done\n");
 	      conn->client_state = CS_DONE;
         end=get_cycles();
         cycles_to_units = get_cpu_mhz(0) * 1000000;

@@ -105,8 +105,19 @@ Execute `make` command in the `redis-4.0.11/` directory to compile Redis. Then r
 cd redis-4.0.11
 make
 cd src
+```
+
+Before we run redis-server, we should make sure that there are no other redis-server running, we could use `ps` , if there are some redis-server running in this computer, you should use `kill` to stop them.
+
+![1](./pic/ps-check-redis.png)
+
+After that, we can run redis-server safely.
+
+```shell
 ./redis-server ../redis.conf
 ```
+
+
 
 **NOTE:** The other two machines also start the `redis-server` in the same way above.
 
@@ -151,6 +162,8 @@ make
 ./redis-init
 ```
 
+![1](pic/redis-init.png)
+
 ### 3.3 RDMA Data Synchronization Scheme
 
 The code of the RDMA data synchronization scheme is divided into two parts, the `server` directory and the `client` directory in the `src/rdma` directory. The code of the server directory runs on the master, and the code of the client directory runs on the slave.
@@ -174,6 +187,8 @@ make
 
 In the rdma-server code, the port we fixed the program binding is 12345.
 
+![1](pic/rdma-server.png)
+
 After the rdma-server program starts, it will use `hiredis` to access the key-value data stored in the Redis server on the master and create a mapping table in memory.
 
 Compile and install the code in the client directory on the slave. Go to the client directory under the src directory, compile the code and run the rdma-client program on the slave.
@@ -183,6 +198,8 @@ cd rdma/client
 make
 ./rdma-client 192.168.0.100 12345
 ```
+
+![1](pic/rdma-client.png)
 
 Rdma-client specifies the IP address and port of rdma-server when running. After the program runs, the client calculates the address of the read data according to the first address of the master return mapping table, and initiates a RDMA read unilateral request directly from the master. Read data in memory. The read data is added to the local Redist database.
 
