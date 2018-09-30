@@ -1,10 +1,10 @@
-# RdmaAcceleratingRedis
+# Rdma Accelerating Redis
 
-## 1 背景
+## 1 Introduction
 
-Redis提供了主从策略，在配置文件中指定slaveof配置项或者在redis-cli中执行slaveof指令，就可以构建master-slave模式的Redis服务。下表1-1是我们为一个具有1GB图片缓冲Redis服务器分别构建一个slave和两个slave的耗时情况。
+There is a very simple way to use and configure Master-Slave replication because Master-Slave strategy is supported in Redis. You can initiate Master-Slave mode in Redis by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Table 1-1 shows the time consuming situation for building a different number of slaves for a Redis server with a 1GB image buffer.
 
-表1-1 Redis构建slave的耗时情况
+Table 1-1 Time consuming of 1GB data using redis master-slave operation
 
 | Slave number | Time consuming(s) | Bandwidth(MB/s) |
 | ------------ | ----------------- | --------------- |
@@ -12,18 +12,16 @@ Redis提供了主从策略，在配置文件中指定slaveof配置项或者在re
 | two          | 174.3             | 5.87            |
 | three        | 259.89            | 3.94            |
 
-Redis主从策略的机制是：master收到slave的同步请求后，将内存中所有的key-value写入本地磁盘中，随后master启动一个线程将文件发送给slave，slave接收到文件再读取写入内存。这样，master和slave就拥有了完全一致的数据，不过在master-slave模式下，slave是只读的，只有master可以接收写。
+**The mechanism of the Redis Master-Slave policy:** Master writes all the pairs of Key-Value into local HDD or SSD after receiving the synchronization request from the slave. Then master starts a background thread to send the file to the slave, when the slave receives the file and then writes the content to the local redis server. In this way, the master and the slave have have exactly the same data. But in the master-slave mode, the slave is read-only, and only the master can receive the write request.
 
-表1-1的结果是master只有1GB的数据时，slave同请求同步到结束的耗时情况。我们相信，当数据量更多以及更多的slave同时请求作为slave时，master-slave模式的性能更差，主要原因如下：
+The result in Table 1-1 is the time-consuming situation in which the slave synchronizes to the end of the request with only 1 GB of data. It demonstrates that when the amount of data is more and more slaves are simultaneously requesting as slaves, the performance of the master-slave mode is even worse. The main reasons are as follows:
 
-1. master将内存中所有的数据先写入磁盘，然后通过网络发送。数据被写入磁盘，发送时再从磁盘读取，数据拷贝次数很多，同时磁盘的读写性能也是非常差的；
+1. The master writes all the data in memory to the local disk first, and then sends it through the network. The data is written to the disk, and then read from the disk when sent so I/O operation induces large overhead, and the read and write performance of the disk is also very poor.
+2. When multiple slave requests are synchronized, the data is transmitted over the TCP network. The TCP network induces a large overhead, and performance will be worse when there is competition.
 
-2. 多个slave请求同步的时候，数据都通过TCP网络传输，TCP网络本身开销很大，当出现竞争的时候性能会更差。
+RDMA permits high-throughout, low-latency networking, which is especially useful in massively parallel computer clusters. Therefore, implementing the master-slave mode through RDMA can greatly improve performance. The experimental results show that the master-slave mode implemented by RDMA is 35 times-80 times better than the master-slave mode implemented by TCP. Table 1-2 shows the results.
 
-
-我们认为使用RDMA实现master-slave模式可以极大的提高性能，实验的结果表明，我们使用RDMA实现的master-slave模式比Redis自带的master-slave模式性能可以提升35倍-80倍，结果表1-2所示。
-
-表1-2 Redis自带master-slave模式与RDMA实现时间对比
+Table 1-2 Comparison of TCP and RDMA for Master-Slave
 
 | Slave   number | Origin Time-consuming(s) | RDMA Time-consuming(s) |
 | -------------- | ------------------------ | ---------------------- |
@@ -31,41 +29,29 @@ Redis主从策略的机制是：master收到slave的同步请求后，将内存�
 | two            | 174.3                    | 2.7                    |
 | three          | 259.89                   | 3.33                   |
 
+## 2 Redis Master-Slave Solution
 
+We implemented the Redis master-slave synchronization solution through RDMA, and the main reasons for the performance improvement are:
 
-## 2 RDMA master-slave实现方案
+1. The data transfer between master and slave is via RDMA read. RDMA read is a one-side operation, all slaves can read data from the master memory in parallel, without causing network competition.
+2. The master's data does not be written to disk. The master creates a mapping table in the memory. The mapping table is composed of consecutive fixed-size data areas. The master maps the key-value stored in the memory to the mapping table, and the slave obtains data from the mapping table.
+3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read.
 
-我们利用RDMA实现Redis master-slave同步方案，性能可以得到很大的提升，主要原因如下：
-
-1. master与slave数据的传输通过RDMA read操作。RDMA read是单边操作，所有的slave可以并行从master内存中读取数据，不会造成网络的竞争；
-2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据。具体的流程如图1-2所示；
-3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
+Figure 1-2 Slave backup data from Master using Mapping Table
 
 ![1](./pic/communication.png)
 
-图1-2 slave利用mapping table从master读取数据
+The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. Figure 1-3 shows the bandwidth comparison for master-slave mode between TCP and RDMA. Figure 1-4 shows the data synchronization of the two modes for the system.
 
+![1](pic/bandwidth.png)
 
+Figure 1-3 Comparison of bandwidths in two master-slave mode
 
-RDMA实现的master-slave同步方案在性能上有突出的表现，并且master与slave同步的性能不会受到slave数量的影响，这受益于RDMA read单边操作。在Redis master-slave模型中，由master将磁盘文件发送给所有的slave，slave数量越多，master的网络压力越大，传输的性能也越差。但是RDMA master-slave将获取数据的任务交给了slave，利用RDMA单边操作、kernel-bypass的特性，即使slave数量不断的增加，数据同步的性能几乎不会受到任何影响。图1-3展示了Redis与我们用RDMA实现的master-slave模式带宽比较，图1-4是两种模式进行数据同步是系统的负载情况。
+The figure above shows that the RDMA master-slave mode bandwidth is only 345MB/s, because our calculation are consistent with Redis TCP master-slave's method of calculating bandwidth. The total amount of data transferred is divided by the total time spent on synchronization. The total time spent includes the time of data transmission and the time it takes to modify the local Redis server after the slave receives the data. In fact, if we only calculate the time of data transmission, the bandwidth we tested in the experiment is about twice that of the above figure.
 
-![1](./pic/bandwidth.png)
+## 3 How to Run
 
-图1-3两种master-slave操作带宽比较
-
-
-
-图1-3两种master-slave系统负载比较
-
-图中看到RDMA master-slave模式带宽只有345MB/s，原因是我们与Redis master-slave计算带宽的方法一致，用总的传输数据量处于同步总耗时，总耗时包括数据传输的时间以及slave收到数据后添加进本地Redis服务器的时间，实际上如果单纯计算数据传输的时间的话，我们在实验中测试只结束数据不添加进Redis服务器的带宽是上图的两倍左右。
-
-
-
-
-
-## 3 How to run
-
-实验的硬件环境和软件环境如下：
+The experimental hardware environment and software environment are as follows:
 
 | Hardware                     | Configuration                          |
 | ---------------------------- | -------------------------------------- |
@@ -85,9 +71,9 @@ RDMA实现的master-slave同步方案在性能上有突出的表现，并且mast
 | Gcc               | 5.4.0                                          |
 | hiredis           | Included in redis 4.0.11                       |
 
- 在本仓库中，src目录下包括三个目录，其中redis目录中包含修改好配置文件的redis源码；redis-init目录先包含的代码用来初始化redis数据库中的数据；rdma目录中包括client和server两个目录，分别用来在slave和master上运行。
+In the repository, the `src` directory contains three directories, where the `redis` directory contains the redis source code with the modified configuration file; the `redis-init` directory contains the code first to initialize the data in the redis database; the `rdma` directory includes the `client` and `server` directories, which are used to run on the slave and master respectively.
 
-Infiniband驱动程序的安装这里不在叙述。用户需要唯一安装的是插件是hiredis，它是一个C语言的redis客户端库，被包含在redis源码中。下面介绍如何安装hiredis。用户需要解压redis目录下的redis-4.0.11.tar.gz，然后进入deps/hiredis目录下编译，安装。
+The Infiniband driver is required but not described here. The only plugin the user needs to install is `hiredis`, which is a C language redis library that is included in the redis source. Here's how to install `hiredis`.
 
 ```shell
 tar -zxvf redis-4.0.11.tar.gz
@@ -96,20 +82,20 @@ make
 sudo make install
 ```
 
-安装完成之后在当前目录会生成一个名字为libhiredis.so的文件，将该文件拷贝到/usr/lib64，如果/usr/lib64目录不存在，则拷贝到/usr/lib目录。然后更新动态链接库缓存。
+After the installation is complete, a file named `libhiredis.so` will be generated in the current directory, and the file must be copied to `/usr/lib64`. If the `/usr/lib64` directory does not exist, shared object file must be copied to the `/usr/lib` directory. Then update the dynamic link library cache.
 
 ```shell
 sudo cp libhiredis.so /usr/lib64
 sudo /sbin/ldconfig
 ```
 
-到这里，hiredis就安装成功了，我们可以在C语言代码中中使用hiredis头文件就可以操作Redis了。
+Here, `hiredis` is installed successfully, we can use the `hiredis` header file in the C language to operate Redis.
 
-下面介绍如何运行我们提供的代码得到上文中我们描述的结果。我们假设搭建一个master和两个slave的环境继续宁测试。
+### 3.1 Master-Slave Cluster
 
-### 3.1 master-slave集群
+Here's how to run the program we provide to get the results we described above. We assume that we are building a master and two slave environment tests.
 
-进入redis-4.0.11目录；执行make指令编译redis，然后进入src目录；指定配置文件运行redis-server。
+Execute `make` command in the `redis-4.0.11/` directory to compile Redis. Then run `redis-server` in `src/`directory with specified configuration file.
 
 ```shell
 cd redis-4.0.11
@@ -118,9 +104,9 @@ cd src
 ./redis-server ../redis.conf
 ```
 
-另外两台机器也按照同样的方式启动redis-server。
+**NOTE:** The other two machines also start the `redis-server` in the same way above.
 
-现在假设三台机器按照下面的方式配置：
+Now assume that the three machines are configured as follows:
 
 | Name   | IP            | Port |
 | ------ | ------------- | ---- |
@@ -128,32 +114,32 @@ cd src
 | slave1 | 192.168.1.101 | 6379 |
 | slave2 | 192.168.1.102 | 6379 |
 
-现在设置slave1同步master数据，在数据同步之前应当先对master数据进行初始化，这部分参考3.2小结。首先在master机器打开新的终端进入redis源码src目录，执行redis-cli连接到slave1上。
+Now set slave1 synchronous master data, the master data should be initialized before data synchronization, this section refers to 3.2 summary. First open a new terminal on the master machine into `src` directory, and perform a `redis-cli` connection to slave1.
 
 ```shell
 cd redis-4.0.11/src
 ./redis-cli -h 192.168.1.101 -p 6379
 ```
 
-如果没有发生异常，此时master已经连接到slave1的Redis服务，接下来执行slaveof指令
+If no exception occurs, the master is already connected to the Redis service of slave1, and then the run `slaveof` command.
 
 ```shell
 slaveof 192.168.1.100 6379
 ```
 
-在master和slave1的redis-server程序输出中可以看到master和slave1数据同步相关的日志，如下所示：
+The master and slave1 data synchronization related logs can be seen in the redis-server program output of master and slave1, as shown below:
 
-![1](./pic/slave.png)
+![1](pic/slave.png)
 
-从日志中可以看到slave从开始执行同步到接收到master所有数据并存储到内存中的时间，根据这些信息我们可以计算出同步的性能。
+From the log, we can see the time from the start of the slave synchronization to the receipt of all the master data and stored in memory, based on which we can calculate the performance of the synchronization.
 
-以上是master与一个slave同步数据数据的过程，多个slave与master同步的过程也类似。
+The above is the process of synchronizing data data between the master and a slave. The process of synchronizing multiple slaves with the master is similar.
 
-### 3.2 master数据初始化
+### 3.2 Master Data Initialization
 
-我们设计的RDMA数据同步方案更适合于值比较大且数据比较均匀的场景，为了方便计算带宽和比较性能，我们对master的数据进行了初始化。在src目录下的redis-init目录包含了对master数据初始化的代码。
+The RDMA data synchronization scheme we designed is more suitable for scenarios with larger values and more uniform data. In order to facilitate calculation of bandwidth and comparison performance, we initialize the data of the master. The `redis-init` directory in the `src` directory contains code that initializes the master data.
 
-首先进入redis-init目录，然后执行make指令，最后运行redis-init就可以。在redis-init之前，需要确保master上的redis-server程序已经运行起来。
+First enter the redis-init directory, then execute the `make` command, and finally run `redis-init`. Before run `redis-init`, you need to make sure that the `redis-server` program on the master is running.
 
 ```shell
 cd redis-init
@@ -161,22 +147,20 @@ make
 ./redis-init
 ```
 
+### 3.3 RDMA Data Synchronization Scheme
 
+The code of the RDMA data synchronization scheme is divided into two parts, the `server` directory and the `client` directory in the `src/rdma` directory. The code of the server directory runs on the master, and the code of the client directory runs on the slave.
 
-### 3.3 RDMA 数据同步方案
-
-RDMA数据同步方案的代码分为两部分，分别是src/rdma目录下的server目录和client目录，server目录的代码在master上运行，client目录的代码在slave上运行。
-
-在运行RDMA代码之前，master和slave都需要先将Redis服务器启动。
+Before running RDMA, both the master node and the slave node need to start the Redis server first.
 
 ```shell
 cd redis-4.0.11/src
 ./redis-server
 ```
 
-master和slave都知道执行redis-server程序即可，不需要指定配置文件。这里假设master上的redis-server数据已经初始化，如果没有，参考3-2小节。
+The master and slave can execute the `redis-server` program directly, and no custom configuration file is required. It is assumed here that the redis-server data on the master has been initialized. If not, refer to section 3-2.
 
-首先在master上编译安装server目录下的代码。进入src目录下的server目录，编译代码并在master运行rdma-server程序。
+First compile and install the code in the server directory on the master. Go to the `rdma/server` directory, compile the code and run the rdma-server program on the master.
 
 ```shell
 cd rdma/server
@@ -184,18 +168,18 @@ make
 ./rdma-server
 ```
 
-在rdma-server的代码中，我们固定了程序绑定的端口是12345。
+In the rdma-server code, the port we fixed the program binding is 12345.
 
-rdma-server程序启动后会利用hiredis访问master上Redis服务器中的存放的key-value数据并在内存中建立mapping table。
+After the rdma-server program starts, it will use `hiredis` to access the key-value data stored in the Redis server on the master and create a mapping table in memory.
 
-在slave上编译安装client目录下的代码。进入src目录下的client目录，编译代码并在slave上运行rdma-client程序。
+Compile and install the code in the client directory on the slave. Go to the client directory under the src directory, compile the code and run the rdma-client program on the slave.
 
-```
+```shell
 cd rdma/client
 make
 ./rdma-client 192.168.0.100 12345
 ```
 
-rdma-client在运行的时候指定了rdma-server的IP地址和端口，程序运行起来之后，客户端根据master返回mapping table的首地址计算读取数据的地址，发起RDMA read单边请求，直接从master内存读取数据。读取的数据加入到本地的Redist数据库。
+Rdma-client specifies the IP address and port of rdma-server when running. After the program runs, the client calculates the address of the read data according to the first address of the master return mapping table, and initiates a RDMA read unilateral request directly from the master. Read data in memory. The read data is added to the local Redist database.
 
-所有的slave都按照上面的指令运行就可以与master同步获取所有的数据。
+All slaves can follow the above instructions to get all the data in sync with the master.
