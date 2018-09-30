@@ -2,7 +2,7 @@
 
 ## 1 Introduction
 
-There is a very simple to use and configure leader follower (master slave) replication because Master-Slave strategy is supported in Redis. It is easy to enable Master-Slave mode in Redis service by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Table 1-1 shows the time consuming situation for building a different number of slaves for  a Redis server with a 1GB image buffer.
+There is a very simple to use and configure Master-Slave replication because Master-Slave strategy is supported in Redis. It is easy to enable Master-Slave mode in Redis service by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Table 1-1 shows the time consuming situation for building a different number of slaves for a Redis server with a 1GB image buffer.
 
 Table 1-1 Time consuming situation of building slaves
 
@@ -21,6 +21,8 @@ The result in Table 1-1 is the time-consuming situation in which the slave synch
 
 RDMA permits high-throughout, low-latency networking, which is especially useful in massively parallel computer clusters. Therefore, implementing the master-slave mode through RDMA can greatly improve performance. The experimental results show that the master-slave mode implemented by RDMA is 35 times-80 times better than the master-slave mode implemented by TCP. Table 1-2 shows the results.
 
+Table 1-2 Comparison of TCP and RDMA for Master-Slave
+
 | Slave   number | Origin Time-consuming(s) | RDMA Time-consuming(s) |
 | -------------- | ------------------------ | ---------------------- |
 | one            | 98                       | 2.8                    |
@@ -35,21 +37,35 @@ We implemented the Redis master-slave synchronization solution through RDMA, and
 2. The master's data does not be written to disk. The master creates a mapping table in the memory. The mapping table is composed of consecutive fixed-size data areas. The master maps the key-value stored in the memory to the mapping table, and the slave obtains data from the mapping table.
 3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read.
 
+Figure 1-2 Slave backup data from Master using Mapping Table
+
+![1](./pic/communication.png)
+
+The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. Figure 1-3 shows the bandwidth comparison for master-slave mode between TCP and RDMA. Figure 1-4 shows the data synchronization of the two modes for the system.
+
+![1](pic/bandwidth.png)
+
+Figure 1-3 Comparison of bandwidths in two master-slave mode
+
+The figure above shows that the RDMA master-slave mode bandwidth is only 345MB/s, because our calculation are consistent with Redis TCP master-slave's method of calculating bandwidth. The total amount of data transferred is divided by the total time spent on synchronization. The total time spent includes the time of data transmission and the time it takes to modify the local Redis server after the slave receives the data. In fact, if we only calculate the time of data transmission, the bandwidth we tested in the experiment is about twice that of the above figure.
+
 ## 3 How to Run
 
 The experimental hardware environment and software environment are as follows:
 
-| Hardware          | Configuration                          |
-| ----------------- | -------------------------------------- |
-| CPU               | Intel(R) Core(TM) CPU i7-7700@ 3.60GHz |
-| OS                | Ubuntu 16.04.3 LTS                     |
-| Memory            | 16GB                                   |
-| Disk              | TOSHIBA 1T HDD                         |
-| Switch            | Mellanox MSX1012B-2BFS 40GE QSFP       |
-| Network Interface | Mellanox MCX353A-FCBT 40GbE            |
+| Hardware                     | Configuration                          |
+| ---------------------------- | -------------------------------------- |
+| CPU                          | Intel(R) Core(TM) CPU i7-7700@ 3.60GHz |
+| Memory                       | 16GB                                   |
+| Disk                         | TOSHIBA 1T HDD                         |
+| Infiniband Switch            | Mellanox MSX1012B-2BFS 40GE QSFP       |
+| Infiniband Network Interface | Mellanox MCX353A-FCBT 40GbE            |
+| Ethernet Router              | Tplink                                 |
+| Ethernet Network Interface   | Realtek PCIe GBE                       |
 
 | Software          | Configuration                                  |
 | ----------------- | ---------------------------------------------- |
+| OS                | Ubuntu 16.04.3 LTS                             |
 | Infiniband Driver | MLNX_OFED_LINUX-4.4-2.0.7.0-ubuntu16.04-x86_64 |
 | Redis             | 4.0.11                                         |
 | Gcc               | 5.4.0                                          |
@@ -59,19 +75,36 @@ In the repository, the `src` directory contains three directories, where the `re
 
 The Infiniband driver is required but not described here. The only plugin the user needs to install is `hiredis`, which is a C language redis library that is included in the redis source. Here's how to install `hiredis`.
 
-### 3.1 Master-Slave Cluster
-
-Unpack `redis-4.0.11.tar.gz` in the Redis directory and excute `make` command in the `redis-4.0.11/` directory to compile Redis. Then run `redis-server` in `src/`directory with specified configuration file.
-
 ```shell
 tar -zxvf redis-4.0.11.tar.gz
+cd redis-4.0.11/deps/hiredis/
+make 
+sudo make install
+```
+
+After the installation is complete, a file named `libhiredis.so` will be generated in the current directory, and the file must be copied to `/usr/lib64`. If the `/usr/lib64` directory does not exist, shared object file must be copied to the `/usr/lib` directory. Then update the dynamic link library cache.
+
+```shell
+sudo cp libhiredis.so /usr/lib64
+sudo /sbin/ldconfig
+```
+
+Here, `hiredis` is installed successfully, we can use the `hiredis` header file in the C language to operate Redis.
+
+### 3.1 Master-Slave Cluster
+
+Here's how to run the program we provide to get the results we described above. We assume that we are building a master and two slave environment tests.
+
+Execute `make` command in the `redis-4.0.11/` directory to compile Redis. Then run `redis-server` in `src/`directory with specified configuration file.
+
+```shell
 cd redis-4.0.11
 make
 cd src
-./redis-server ../redis.cfg
+./redis-server ../redis.conf
 ```
 
-The other two machines also start the `redis-server` in the same way.
+**NOTE:** The other two machines also start the `redis-server` in the same way above.
 
 Now assume that the three machines are configured as follows:
 
@@ -102,11 +135,11 @@ From the log, we can see the time from the start of the slave synchronization to
 
 The above is the process of synchronizing data data between the master and a slave. The process of synchronizing multiple slaves with the master is similar.
 
-## 3.2 Master Data Initialization
+### 3.2 Master Data Initialization
 
 The RDMA data synchronization scheme we designed is more suitable for scenarios with larger values and more uniform data. In order to facilitate calculation of bandwidth and comparison performance, we initialize the data of the master. The `redis-init` directory in the `src` directory contains code that initializes the master data.
 
-First enter the redis-init directory, then execute the `make` command, and finally run `redis-init`. Before redis-init, you need to make sure that the redis-server program on the master is running.
+First enter the redis-init directory, then execute the `make` command, and finally run `redis-init`. Before run `redis-init`, you need to make sure that the `redis-server` program on the master is running.
 
 ```shell
 cd redis-init
@@ -114,11 +147,20 @@ make
 ./redis-init
 ```
 
-## 3.3 RDMA Data Synchronization Scheme
+### 3.3 RDMA Data Synchronization Scheme
 
-The code of the RDMA data synchronization scheme is divided into two parts, the server directory and the client directory in the `src/rdma` directory. The code of the server directory runs on the master, and the code of the client directory runs on the slave.
+The code of the RDMA data synchronization scheme is divided into two parts, the `server` directory and the `client` directory in the `src/rdma` directory. The code of the server directory runs on the master, and the code of the client directory runs on the slave.
 
-First compile and install the code in the server directory on the master. Go to the server directory under the `src` directory, compile the code and run the rdma-server program on the master.
+Before running RDMA, both the master node and the slave node need to start the Redis server first.
+
+```shell
+cd redis-4.0.11/src
+./redis-server
+```
+
+The master and slave can execute the `redis-server` program directly, and no custom configuration file is required. It is assumed here that the redis-server data on the master has been initialized. If not, refer to section 3-2.
+
+First compile and install the code in the server directory on the master. Go to the `rdma/server` directory, compile the code and run the rdma-server program on the master.
 
 ```shell
 cd rdma/server
@@ -132,7 +174,7 @@ After the rdma-server program starts, it will use `hiredis` to access the key-va
 
 Compile and install the code in the client directory on the slave. Go to the client directory under the src directory, compile the code and run the rdma-client program on the slave.
 
-```
+```shell
 cd rdma/client
 make
 ./rdma-client 192.168.0.100 12345
