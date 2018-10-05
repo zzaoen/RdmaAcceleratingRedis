@@ -1,20 +1,22 @@
-我们的实验环境网络结构如下：
+
+
+The network structure we used in the experiment is as follows：
 
 ![](pic\Ethernet-archi.jpg)
 
-图1-1 基于TCP的redis master-slave同步网络环境
+Figure 1-1 Redis master-slave based on TCP using router
 
 ![](pic\RDMA-archi.jpg)
 
-图1-2 基于RDMA的redis master-slave同步网络环境
+Figure 1-2 Redis master-slave based on RDMA
 
-上面的两幅图中都是一个master与两个slave，在以太网环境下，所有的机器都与路由器相连，在RDMA环境下，所有的机器都与Mellanox交换机相连。确实，以太网的硬件参数与RDMA相差很多，原因是我们实验室没有Gb的以太网交换机。我们的实验需要测试多台机器，所以只能选择使用路由器。如果只是一台master以一台slave进行同步，机器可以使用网线直连，TCP网络性能会提升，后面我会给出新的测试数据。
+Figure1-1 and Figure1-2 above are all one master and two slaves. All machines are connected to the router when using Ethernet, and All machines are connected to the Mellanox Switch when using RDMA. The reason why we uses a 100Mbps router is that our lab doesn't have a Gb Ethernet switch. But our experiments require multiple machines to be connected, so we have to use a router. If there are only one master and one slave, they can connected directly by cable, without using router, the performance of the master-slave synchronization will improved. I will show you some new test data in **part 2**.
 
+## part 1 (question 1,2,5,6,8)
 
+Firstly, I want to talk about question 1、2、5、6 and 8.
 
-先回答问题1、2、5、6、8：
-
-对于问题1，我们的两组对比实验的网络结构分别是：
+As for question 1, The network structure of our two experiments are:
 
 -100Mb with TCP
 
@@ -22,17 +24,19 @@
 
 
 
-对于问题2和5
+As for question 2 and 5, 
 
-redis master-slave是指redis本身的slaveof指令实现master与slave数据同步；
-
-RDMA master-slave是指我们使用RDMA实现的master与slave数据同步。
-
-在readme的图1-3我们确实标错了数据，非常抱歉。我们在报告中使用了带宽来进行比较，实际上我们不应该使用带宽的。在报告中，我们的带宽是通过总传输的数据量除以同步完成时间计算得到的，所以直接使用时间来进行比较更合适。非常抱歉。
+we call "redis master-slave", which means Redis's `slaveof` instruction synchronizes master and slave data;  "RDMA master-slave" refers to the master and slave data synchronization we implemented using `RDMA Verbs`.
 
 
 
-问题6说的图1-2的比较的是：
+I'm so sorry for that I marked the wrong data in readme file Figure1-3.
+
+In readme, we use "bandwidth" to compare experiments, we calculate the bandwidth by dividing the total amount of data transferred by the synchronization completion time. To be honest, we shouldn't use "bandwidth" to compare experiments, "Time consuming" is much better. Synchronization completion time includes not only the data transfer time, but also other times, such as data write time to disk.
+
+
+
+Question 6 mentions Figure1-2 in readme which shows a comparison of two different synchronization methods:
 
 method1: using TCP(100Mb) and file writing to disk in the slave and master.
 
@@ -40,96 +44,72 @@ method2: using RDMA(56Gb) without file writing to disk, only using memory.
 
 
 
-对于问题8，关于RoCE。在之前的比较中，我们只关注了redis自带的和我们用RDMA实现了这两种master-slave数据同步方案的比较，我们并没有测试RoCE。我在相关文章上看过RoCE的介绍，但是并没有对RoCE认识并不多，我对RoCE的认识是我们利用Mellanox硬件，在使用网络时指定Mellanox网卡的IP地址用来通信，比如scp指令传输文件是指定Mellanox网卡的IP地址，那么文件传输就是RoCE，不过我并不确定自己理解的对不对。
+For question 8, about RoCE。In the previous comparison, we only focused on the comparison between the two master-slave data synchronization schemes(TCP using router and RDMA). We haven‘t tested RoCE. 
+
+I have read the introduction of RoCE in related articles and papers, but I don’t know much about RoCE. My understanding of RoCE is that if we specify a TCP/IP program to use Mellanox network card to communicate, this communication is RoCE. I am not sure if I understand it.
+
+
 
 ![](pic\RoCE.png)
 
+Figure1-3 RDMA supported protocol
 
 
-根据您的问题，我重新做了几个实验，以下所有的测试都是一个master和一个slave的情况
 
-- master与slave的以太网网卡经过路由器相连
-- master与slave的以太网网卡直接相连，不经过路由器
-- master与slave通过RoCE数据同步(如果我上面理解的RoCE正确的话)
-- master与slave通过RDMA read数据同步
+According to your questions, we did a four new tests, all of the following tests are a master and a slave:
 
-实验结过如下：
+- TCP using router
+- TCP Direct, without using router
+- RoCE
+- RDMA read
+
+These four type of connections' time consuming as following：
 
 | Connection | TCP Using Router | TCP Direct | RoCE  | RDMA |
 | ---------- | ---------------- | ---------- | ----- | ---- |
 | Time(s)    | 98               | 24         | 14.15 | 2.8  |
 
- 
 
 
+## part 2 (question 4,7,10,13)
 
+Question 7 asked why Redis' master-slave mechanism needs to write memory data to disk. In this regard, we refer to the relevant information on the Internet. What's more, in the Redis running log, we can also confirm that the master writes the memory data to the local disk after receiving the slave request.
 
+![tcp-direct-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-router-master-log.png)
 
-现在，我将给出我们实验环境的一些数据，回答问题2，11和12。
+Figure 1-7 The log of master during data synchronization when TCP using router
 
-fio测试的本地磁盘的数据如下：
+![tcp-router-slave-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-router-slave-log.png)
 
-![](pic\answer\fio.png)
+Figure 1-8 The log of slave during data synchronization when TCP using router
 
+From the log above, we can notice that after the slave requests synchronization, the master checks whether resynchronization can be performed (the resynchronization is permitted if the slave synchronized with the master before), if resynchronization is not available, the master writes the data to the disk file, and then the file is sent to the slave. The slave loaded the file into memory after receiving the file.
 
+The questions 4 and 10 can also be answered here.
 
-iperf测试的TCP网络数据如下：
+![rdma-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-direct-master-log.png)
 
-![](pic\answer\iperf-tcp-router.png)
+Figure 1-9 The log of master during data synchronization when **TCP Direct** 
 
-上面这个是使用路由器之后iperf的测试结果。
+![rdma-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/roce-master-log.png)
 
-![rdma-master-log](pic\answer\iperf-direct-tcp.png)
+Figure 1-10 The log master during data synchronization when **using RoCE**
 
-上面这个是没有使用路由器，网卡直接连接的iperf测试结果。
+The logs of master and slave data synchronization are shown in Figure 1-3, Figure 1-5, and Figure 1-6.
 
+- Figure 1-3 shows TCP with a router
+- Figure 1-5 shows the TCP Direct
+- Figure 1-6 shows RoCE
 
+Let's organize the data and we can see:
 
-ib_send_bw和ib_read_bw数据如下：
+| Connection            | TCP Using Router | TCP Direct | RoCE  |
+| --------------------- | ---------------- | ---------- | ----- |
+| Total time(s)         | 97.21            | 24.06      | 24.14 |
+| File write time(s)    | 13.52            | 13.36      | 13.48 |
+| Data transfer time(s) | 83.69            | 10.7       | 10.66 |
 
-![ib_send_bw](pic\answer\ib_send_bw.png)
-
-![ib_read_bw](pic\answer\ib_read_bw.png)
-
-
-
-
-
-
-
-问题7提到为什么Redis的master-slave机制需要将内存数据写入到磁盘。这个是我们参考网上关上资料确定的，在Redis运行日志中也可以确定master收到slave的请求先将内存数据写入本地磁盘。![tcp-direct-master-log](pic\answer\tcp-router-master-log.png)
-
-图1-3 TCP using router，数据同步时master的日志输出
-
-![tcp-router-slave-log](pic\answer\tcp-router-slave-log.png)
-
-图1-4 TCP using router，数据同步时slave的日志输出
-
-从日志我们可以看到，slave请求同步后，master查看是否可以进行resynchronization（如果slave之前与master同步过可以resynchronization），如果不可以进行resynchronization，master将数据写入到磁盘文件，随后文件发送给slave。slave收到文件后加载到内存中。
-
-问题4和10的答案也可以从这里得到答案。
-
-![rdma-master-log](pic\answer\tcp-direct-master-log.png)
-
-图1-5 TCP Direct，数据同步时master的日志输出
-
-![rdma-master-log](pic\answer\roce-master-log.png) 图1-6 RoCE，数据同步时master的日志输出
-
-图1-3、图1-5和图1-6都是master与slave数据同步是master的日志
-
-- 图1-3使用的是带路由器的TCP
-- 图1-5是不带路由器，直连的TCP
-- 图1-6使用的是RoCE。
-
-我们整理一下数据，可以看到：
-
-| Connection         | TCP Using Router | TCP Direct | RoCE  |
-| ------------------ | ---------------- | ---------- | ----- |
-| total time(s)      | 97.21            | 24.06      | 24.14 |
-| file write time(s) | 13.52            | 13.36      | 13.48 |
-| transfer time(s)   | 83.69            | 10.7       | 10.66 |
-
-我们编写了一个C程序，它的功能就是从一个Redis服务器（master）get值，并立即set到本地的Redis服务器（slave）中，读取的数据量与之前测试使用的数据量同样。这个程序的功能类似于master需要将数据写入本地磁盘，而之间将内存中数据同步给slave。代码如下，
+We wrote a C program whose function is to get the value from a Redis server (master) and immediately set it to the local Redis server (slave), reading the same amount of data as the previous test. The function of this program is similar to the master's need to write data to the local disk, while synchronizing the in-memory data to the slave. The code is shown as below.
 
 ```c
 #define KEY_COUNT 256
@@ -153,25 +133,26 @@ int main(){
 }
 ```
 
-我们调整了网络环境，得到了使用TCP Using Router、TCP Direct和RoCE：
+We adjusted the network environment and got the data:
 
 | connection | TCP Using Router | TCP Direct | RoCE | RDMA |
 | ---------- | ---------------- | ---------- | ---- | ---- |
 | time(s)    | 6.81             | 2.92       | 2.58 | 2.8  |
 
-所以，根据上面的测试，我们结论是：
+Based on the above test, we conclude that:
 
-- slaveof指令将数据写入磁盘是一个耗时的操作，当网络性能好的时候，这种开销几乎要占据一半的时间；
-- 在去掉master写文件和传输文件这一过程之后，TCP using router、TCP Direct和RoCE的master和slave的同步性能得到很大的提升，并且RoCE甚至好于RDMA；
+- The `slaveof` command writes data to disk which is a time consuming operation. When the network performance is good, this overhead takes more than half of the time;
+- After removing the process of master writing files and transferring files, the synchronization performance of master and slave of TCP using router, TCP Direct and RoCE is greatly improved, and RoCE is even better than RDMA;
 
-不过以上的实验都是在一台master和一台slave上测试的，我们相信在使用更多机器进行测试的时候，TCP的测试结果会更差一些。
+However, the experiments above were all tested on one master and one slave. We believe that the TCP test results will be worse when using more machines for testing.
 
-虽然目前来看，我们的RDMA程序在一个master和一个slave的数据同步结果并不满意，我们认为在更多机器进行数据同步的时候，我们的使用RDMA read设计的程序会体现出优势。因为我们的设计理念是master为数据建立mapping table，其他所有的slave利用RDMA read直接从master获取数据，slave负责计算如何获取数据，而master几乎不需要任何干预。利用RDMA read单边操作的优势，不管有多少个slave同时向master请求数据，我们的性能都能保持稳定。
+At present, the data synchronization result of our RDMA program in a master and a slave is not satisfactory. We believe that our program using RDMA read will show advantages when more machines are synchronizing data. Because our design philosophy is that the master creates a mapping table for the data, all other slaves use RDMA read to get data directly from the master. The slave is responsible for calculating how to get the data, and the master requires almost no intervention. Utilizing the advantages of RDMA read unilateral operation, our performance remains stable no matter how many slaves request data from the master at the same time.
 
-在上面的结果中，使用RoCE比我们写的RDMA read要快，主要原因是我们的RDMA代码中出现了耗时操作。当slave机器使用RDMA read从master读取到一个value的数据后，在slave需要执行Redis的set命令将数据添加到本地Redis服务器中。但是在实验中我们发现，RDMA read的数据必须被拷贝到一个buf中，而且当读取的数据操作1MB大小的时候，memcpy函数拷贝的数据总是出现错误数据。我们只能在代码中一个字符一个字符的拷贝。
+In the above results, the use of RoCE is faster than the RDMA read we wrote, mainly because of the time-consuming operation in our RDMA code. When the slave machine reads the value data from the master using the RDMA read, the slave needs to execute the Redis set command to add the data to the local Redis server. However, in the experiment we found that the data of the RDMA read must be copied to a buffer, and when the read data is at a size of 1 MB, the data copied by the memcpy function always encounter error. We can only copy one character and one character in the code.
 
 ```c
 #define ARR_LEN 1024 * 1024 * 4
+char *dis=conn->rdma_local_region + max_mapping_table_size + k * block_size;
 while(j < ARR_LEN)
 {
 	s[j]=(unsigned char)*((dis + j));
@@ -179,11 +160,41 @@ while(j < ARR_LEN)
 }
 ```
 
-这个耗费的非常多的时间，如果我们的RDMA代码不执行这个循环，只是从master读取数据，整个流程的耗时是1.02s，性能可以提高63.6%。但是我们目前还没有找到解决的办法。
+Copy operation costs a lot of time, if our RDMA code does not execute this loop, just read data from the master, the whole process takes 1.02s, and the performance can be improved by 63.6%. But until now,  we haven't found a solution yet.
+
+Question 13 is asking why our RDMA read does not reach the bandwidth that the hardware environment should have. The maximum bandwidth of our hardware environment is 3180MB/s. If we remove the code of the data copy we mentioned above in our program, our RDMA code read whole data costs 0.0082s and the bandwidth is 2754.92MB/s. We are still making some explore, hoping to solve the problem that is cause low performance.
 
 
 
-问题13是问我们的RDMA read为什么没有达到硬件环境应有的带宽，我们的硬件环境最大带宽是3180MB/s，如果在我们的程序中去掉上面我们说的数据拷贝的代码，我们的程序完成数据传输的时间是0.0082s，带宽是2754.92MB/s。我们目前依然也在做实验，希望可以解决造成性能不是特别高的问题。
+## part 3 (question 3,11,12)
+
+Now, I will give some data about our experimental environment, in order to answer question3, 11 and 12. 
+
+Test local disk by using `fio`：
+
+![](pic\answer\fio.png)
+
+Figure1-4 Local Disk Performance
+
+Test network performance by using `iperf`:
+
+![](pic\answer\iperf-tcp-router.png)
+
+Figure 1-5 TCP Using Router
+
+![rdma-master-log](pic\answer\iperf-direct-tcp.png)
+
+Figure 1-6 TCP Direct
+
+
+
+`ib_send_bw` and `ib_read_bw`：
+
+![ib_send_bw](pic\answer\ib_send_bw.png)
+
+![ib_read_bw](pic\answer\ib_read_bw.png)
+
+
 
 
 
