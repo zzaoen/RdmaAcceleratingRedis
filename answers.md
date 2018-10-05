@@ -1,14 +1,12 @@
+The network structure we used in the previous experiment is as follows：
 
+![](./pic/Ethernet-archi.jpg)
 
-The network structure we used in the experiment is as follows：
+Figure 1-1 Master-slave based on TCP using router
 
-![](pic\Ethernet-archi.jpg)
+![](./pic/RDMA-archi.jpg)
 
-Figure 1-1 Redis master-slave based on TCP using router
-
-![](pic\RDMA-archi.jpg)
-
-Figure 1-2 Redis master-slave based on RDMA
+Figure 1-2 Master-slave based on RDMA
 
 Figure1-1 and Figure1-2 above are all one master and two slaves. All machines are connected to the router when using Ethernet, and All machines are connected to the Mellanox Switch when using RDMA. The reason why we uses a 100Mbps router is that our lab doesn't have a Gb Ethernet switch. But our experiments require multiple machines to be connected, so we have to use a router. If there are only one master and one slave, they can connected directly by cable, without using router, the performance of the master-slave synchronization will improved. I will show you some new test data in **part 2**.
 
@@ -16,7 +14,7 @@ Figure1-1 and Figure1-2 above are all one master and two slaves. All machines ar
 
 Firstly, I want to talk about question 1、2、5、6 and 8.
 
-As for question 1, The network structure of our two experiments are:
+As for question 1, The network structure of our previous two experiments are:
 
 -100Mb with TCP
 
@@ -24,19 +22,19 @@ As for question 1, The network structure of our two experiments are:
 
 
 
-As for question 2 and 5, 
+For question 2 and 5, 
 
-we call "redis master-slave", which means Redis's `slaveof` instruction synchronizes master and slave data;  "RDMA master-slave" refers to the master and slave data synchronization we implemented using `RDMA Verbs`.
-
-
-
-I'm so sorry for that I marked the wrong data in readme file Figure1-3.
-
-In readme, we use "bandwidth" to compare experiments, we calculate the bandwidth by dividing the total amount of data transferred by the synchronization completion time. To be honest, we shouldn't use "bandwidth" to compare experiments, "Time consuming" is much better. Synchronization completion time includes not only the data transfer time, but also other times, such as data write time to disk.
+we call "redis master-slave", which means Redis's `slaveof` instruction synchronizes master and slave data;  "RDMA master-slave" refers to the master and slave data synchronization we implemented by using `RDMA Verbs`.
 
 
 
-Question 6 mentions Figure1-2 in readme which shows a comparison of two different synchronization methods:
+I'm so sorry for that I marked the wrong data in readme. I have corrected Figure1-3 in readme.
+
+We use "bandwidth" to compare experiments, we calculate the bandwidth by dividing the total amount of data transferred by the synchronization completion time. To be honest, we shouldn't use "bandwidth" to compare experiments, "Time consuming" is much better. Synchronization completion time includes not only the data transfer time, but also other times, such as data write time to disk.
+
+
+
+Question 6 mentioned Figure1-2 in readme which shows a comparison of two different synchronization methods:
 
 method1: using TCP(100Mb) and file writing to disk in the slave and master.
 
@@ -44,22 +42,22 @@ method2: using RDMA(56Gb) without file writing to disk, only using memory.
 
 
 
-For question 8, about RoCE。In the previous comparison, we only focused on the comparison between the two master-slave data synchronization schemes(TCP using router and RDMA). We haven‘t tested RoCE. 
+For question 8, about RoCE. In the previous comparison, we only focused on the comparison between the two types of master-slave data synchronization schemes(TCP using router and RDMA). We haven‘t tested RoCE. 
 
 I have read the introduction of RoCE in related articles and papers, but I don’t know much about RoCE. My understanding of RoCE is that if we specify a TCP/IP program to use Mellanox network card to communicate, this communication is RoCE. I am not sure if I understand it.
 
 
 
-![](pic\RoCE.png)
+![](./pic/RoCE.png)
 
 Figure1-3 RDMA supported protocol
 
 
 
-According to your questions, we did a four new tests, all of the following tests are a master and a slave:
+According to your questions, we did four tests, all of the following tests using one master and one slave, master contains 937MB data in Redis server, they have different network connections:
 
 - TCP using router
-- TCP Direct, without using router
+- TCP Direct
 - RoCE
 - RDMA read
 
@@ -67,7 +65,7 @@ These four type of connections' time consuming as following：
 
 | Connection | TCP Using Router | TCP Direct | RoCE  | RDMA |
 | ---------- | ---------------- | ---------- | ----- | ---- |
-| Time(s)    | 98               | 24         | 14.15 | 2.8  |
+| Time(s)    | 97.21            | 24.06      | 24.14 | 2.8  |
 
 
 
@@ -75,25 +73,25 @@ These four type of connections' time consuming as following：
 
 Question 7 asked why Redis' master-slave mechanism needs to write memory data to disk. In this regard, we refer to the relevant information on the Internet. What's more, in the Redis running log, we can also confirm that the master writes the memory data to the local disk after receiving the slave request.
 
-![tcp-direct-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-router-master-log.png)
+![tcp-direct-master-log](./pic/answer/tcp-router-master-log.png)
 
-Figure 1-7 The log of master during data synchronization when TCP using router
+Figure 1-4 The log of master during data synchronization when TCP using router
 
-![tcp-router-slave-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-router-slave-log.png)
+![tcp-router-slave-log](./pic/answer/tcp-router-slave-log.png)
 
-Figure 1-8 The log of slave during data synchronization when TCP using router
+Figure 1-5 The log of slave during data synchronization when TCP using router
 
 From the log above, we can notice that after the slave requests synchronization, the master checks whether resynchronization can be performed (the resynchronization is permitted if the slave synchronized with the master before), if resynchronization is not available, the master writes the data to the disk file, and then the file is sent to the slave. The slave loaded the file into memory after receiving the file.
 
 The questions 4 and 10 can also be answered here.
 
-![rdma-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/tcp-direct-master-log.png)
+![rdma-master-log](./pic/answer/tcp-direct-master-log.png)
 
-Figure 1-9 The log of master during data synchronization when **TCP Direct** 
+Figure 1-6 The log of master during data synchronization when **TCP Direct** 
 
-![rdma-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/roce-master-log.png)
+![rdma-master-log](./pic/answer/roce-master-log.png)
 
-Figure 1-10 The log master during data synchronization when **using RoCE**
+Figure 1-7 The log master during data synchronization when **using RoCE**
 
 The logs of master and slave data synchronization are shown in Figure 1-3, Figure 1-5, and Figure 1-6.
 
@@ -172,29 +170,31 @@ Now, I will give some data about our experimental environment, in order to answe
 
 Test local disk by using `fio`：
 
-![](pic\answer\fio.png)
+![](./pic/answer/fio.png)
 
-Figure1-4 Local Disk Performance
+Figure1-8 Local Disk Performance
 
 Test network performance by using `iperf`:
 
-![](pic\answer\iperf-tcp-router.png)
+![](./pic/answer/iperf-tcp-router.png)
 
-Figure 1-5 TCP Using Router
+Figure 1-9 TCP Using Router
 
-![rdma-master-log](pic\answer\iperf-direct-tcp.png)
+![rdma-master-log](./pic/answer/iperf-direct-tcp.png)
 
-Figure 1-6 TCP Direct
+Figure 1-10 TCP Direct
 
 
 
 `ib_send_bw` and `ib_read_bw`：
 
-![ib_send_bw](pic\answer\ib_send_bw.png)
+![ib_send_bw](./pic/answer/ib_send_bw.png)
 
-![ib_read_bw](pic\answer\ib_read_bw.png)
+Figure 1-11 ib_send_bw
 
+![ib_read_bw](./pic/answer/ib_read_bw.png)
 
+Figure 1-12 ib_read_bw
 
 
 
