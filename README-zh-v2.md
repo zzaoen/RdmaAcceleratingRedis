@@ -94,16 +94,32 @@ Redis主从复制的过程如下：
 我们利用RDMA实现Redis master-slave同步方案，性能可以得到很大的提升，主要原因如下：
 
 1. master与slave数据的传输通过RDMA read操作。RDMA read是单边操作，所有的slave可以并行从master内存中读取数据，不会造成网络的竞争；
-2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据。具体的流程如图1-2所示；
-3. slave只知道master上mapping table的起始地址，slave通过起始地址加便宜了计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
 
-![1](./pic/communication.png)
+2. master的数据完全不需要写入到磁盘。master在内存中建立了一个mapping table，mapping table是由连续的固定大小的数据区域组成，master将其存储在内存的key-value映射到mapping table中，slave从mapping table获取数据。具体的流程如图1-2所示；
+
+3. slave只知道master上mapping table的起始地址，slave通过起始地址加偏移量计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
+
+   
+
+
+
+![communication](D:\git\RdmaAcceleratingRedis\pic\answer\communication.png)
 
 图1-2 slave利用mapping table从master读取数据
 
 
 
-RDMA实现的master-slave同步方案在性能上有突出的表现，并且master与slave同步的性能不会受到slave数量的影响，这受益于RDMA read单边操作。在Redis master-slave模型中，由master将磁盘文件发送给所有的slave，slave数量越多，master的网络压力越大，传输的性能也越差。但是RDMA master-slave将获取数据的任务交给了slave，利用RDMA单边操作、kernel-bypass的特性，即使slave数量不断的增加，数据同步的性能几乎不会受到任何影响。图1-3展示了Redis与我们用RDMA实现的master-slave模式带宽比较，图1-4是两种模式进行数据同步是系统的负载情况。
+RDMA实现的master-slave同步方案在性能上有突出的表现，并且master与slave同步的性能不会受到slave数量的影响，这受益于RDMA read单边操作。在Redis master-slave模型中，由master将磁盘文件发送给所有的slave，slave数量越多，master的网络压力越大，传输的性能也越差。但是RDMA master-slave将获取数据的任务交给了slave，利用RDMA单边操作、kernel-bypass的特性，即使slave数量不断的增加，数据同步的性能几乎不会受到任何影响。
+
+图1-3展示了Redis自带的主从复制与我们用RDMA实现的主从复制的比较。
+
+
+
+
+
+
+
+
 
 ![1](./pic/bandwidth.png)
 
