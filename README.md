@@ -54,8 +54,6 @@ Table 2-2 Synchronization Time with disk writing
 | RoCE             | 21.03        | 26.67        | 27.09          |
 | RDMA             | 0.031        | 0.032        | 0.031          |
 
-The above experimental results meet a problem, we use the RDMA to implement master-slave replication.
-
 The above experimental results have a problem: in the master-slave replication method of RDMA implementation, the master creates a mapping table in memory, and the slave uses the RDMA `read` operation to directly read the data in the master memory. TCP using router, TCP direct, and RoCE all require the master to dump data in memory to disk first. We use Redis' C programming interface to implement a simple program that eliminates the time the master writes to the disk.
 
 ```c
@@ -106,7 +104,7 @@ Figure 3-1 Master-slave using RDMA and Mapping Table
 
 
 
-The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. 
+The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read one-sided operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. 
 
 ## 4 How to Run
 
@@ -150,7 +148,7 @@ sudo /sbin/ldconfig
 
 Here, `hiredis` is installed successfully, we can use the `hiredis` header file in the C language to operate Redis.
 
-### 3.1 Master-Slave Cluster
+### 4.1 Master-Slave Cluster
 
 Here's how to run the program we provide to get the results we described above. We assume that we are building a master and two slave environment tests.
 
@@ -205,7 +203,7 @@ From the log, we can see the time from the start of the slave synchronization to
 
 The above is the process of synchronizing data data between the master and a slave. The process of synchronizing multiple slaves with the master is similar.
 
-### 3.2 Master Data Initialization
+### 4.2 Master Data Initialization
 
 The RDMA data synchronization scheme we designed is more suitable for scenarios with larger values and more uniform data. In order to facilitate calculation of bandwidth and comparison performance, we initialize the data of the master. The `redis-init` directory in the `src` directory contains code that initializes the master data.
 
@@ -219,7 +217,7 @@ make
 
 ![1](./pic/redis-init.png)
 
-### 3.3 RDMA Data Synchronization Scheme
+### 4.3 RDMA Data Synchronization Scheme
 
 The code of the RDMA data synchronization scheme is divided into two parts, the `server` directory and the `client` directory in the `src/rdma` directory. The code of the server directory runs on the master, and the code of the client directory runs on the slave.
 
