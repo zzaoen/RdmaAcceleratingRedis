@@ -45,7 +45,7 @@ Redis主从复制的过程如下：
 | TCP using router | iperf | 11.78 |
 | TCP direct      | iperf | 117.8 |
 | RoCE | iperf | 190.72 |
-| RDMA | ib_read_bw | 5832.04 |
+| RDMA | ib_read_bw | 3180.76 |
 
 我们针对不同的网络情况，测试了主从复制从开始执行到完成的时间。master的Redis服务器中一共存储了937MB的数据，在不同网络情况下，不同slave数量完成同步的时间如下表1-2所示：
 
@@ -54,7 +54,7 @@ Redis主从复制的过程如下：
 | 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
 | ---------------- | -------- | ---- | ---- |
 | TCP using router | 98 | 174.3 | 259.9 |
-| TCP direct       | 19.0 | 21.1 |  |
+| TCP direct       | 19.0 | 21.1 | \ |
 | RoCE | 21.03 | 26.67 | 27.09 |
 | RDMA | 0.031 | 0.032 | 0.031 |
 
@@ -89,7 +89,7 @@ int main(){
 
 | 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
 | ---------------- | -------- | ---- | ---- |
-| TCP direct       | 4.89 | 5.05 |  |
+| TCP direct       | 4.89 | 5.05 | \ |
 | RoCE | 2.55 | 2.62 | 2.65 |
 | RDMA | 0.031 | 0.032 | 0.031 |
 
@@ -105,11 +105,10 @@ int main(){
 
 3. slave只知道master上mapping table的起始地址，slave通过起始地址加偏移量计算出数据在mapping table上的地址，直接使用RDMA read从master内存区域读取数据。
 
-   
 
 
 
-![communication](D:\git\RdmaAcceleratingRedis\pic\answer\communication.png)
+![communication](.\pic\answer\communication.png)
 
 图1-2 slave利用mapping table从master读取数据
 
