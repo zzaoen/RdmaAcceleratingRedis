@@ -19,8 +19,6 @@ Redis主从复制的过程如下：
 
 首先，数据写入磁盘非常耗时，如果master的Redis服务器中存储了相当多的数据，这个写磁盘的过程是难以接受的。我们测试发现，master网络性能较好时，slave和master同步的过程中写磁盘的时间占据了整个时间的一半以上；其次，master将文件发送给slave，当大量的slave同时请求，master的网络负载增加，网络传输性能降低。
 
-
-
 针对前面我们提到的两个问题，我们使用RDMA实现了新的master-slave同步方案，
 
 1. master在内存中为Redis中的数据建立一个mapping table，节省了master将数据写入磁盘的时间开销，同时利用mapping table，可以充分利用RDMA的性能；
@@ -39,6 +37,8 @@ Redis主从复制的过程如下：
 
 我们使用一些测试工具测试了相关硬件设备的性能：
 
+表1-1 硬件设备的性能
+
 | 设备             | 测试工具 | 带宽(MB/s) |
 | ---------------- | -------- | ---- |
 | 磁盘             | fio      | 96.97 |
@@ -47,7 +47,9 @@ Redis主从复制的过程如下：
 | RoCE | iperf | 190.72 |
 | RDMA | ib_read_bw | 5832.04 |
 
-我们针对不同的网络情况，测试了主从复制从开始执行到完成的时间，其中master的Redis服务器中一共存储了937MB的数据，具体不同网络情况下，不同slave数量完成同步的时间情况，测试结果如下。
+我们针对不同的网络情况，测试了主从复制从开始执行到完成的时间。master的Redis服务器中一共存储了937MB的数据，在不同网络情况下，不同slave数量完成同步的时间如下表1-2所示：
+
+表1-2 同步完成时间情况
 
 | 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
 | ---------------- | -------- | ---- | ---- |
@@ -56,23 +58,21 @@ Redis主从复制的过程如下：
 | RoCE | 21.03 | 26.67 | 27.09 |
 | RDMA | 0.031 | 0.032 | 0.031 |
 
-上面的实验结果有一个问题，我们用RDMA实现的主从复制
-
-上面的测试，TCP和RoCE使用的是Redis自带的`slaveof`指令，同步完成的时间包括写磁盘的时间。我们自己我们写了一个不需要写磁盘的同步程序。
+上面的实验结果有一个问题，RDMA实现的主从复制方法中，master在内存中建立mapping table，slave使用RDMA read操作直接读取master内存中的数据。而TCP using router、TCP direct和RoCE都需要master先将内存中的数据写入磁盘。我们使用Redis的C语言编程接口实现一个简单的程序，可以省去master写磁盘的时间。
 
 ```c
 #define KEY_COUNT 256
 clock_t time_start, time_end;
 int main(){
-    redisContext* redis_conn = redisConnect("192.168.1.102", 6379); 
+    redisContext* redis_conn_remote = redisConnect("192.168.1.102", 6379); 
     redisContext* redis_conn_local = redisConnect("127.0.0.1", 6379); 
     if(redis_conn->err)   
-        printf("connection error:%s\n", redis_conn->errstr); 
+        printf("connection error:%s\n", redis_conn_remote->errstr); 
     int start = 0;
     time_start = clock();
     redisReply* reply = NULL;
     while(start++ < KEY_COUNT){
-        reply = redisCommand(redis_conn, "get %d", start);
+        reply = redisCommand(redis_conn_remote, "get %d", start);
         redisCommand(redis_conn_local, "set %d %s", start, reply->str);
     }
     time_end = clock();
@@ -82,7 +82,9 @@ int main(){
 }
 ```
 
+实验的结果如表1-3
 
+表1-3 master不写磁盘时同步完成时间情况
 
 
 | 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
