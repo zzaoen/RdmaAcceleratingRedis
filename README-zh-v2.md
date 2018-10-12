@@ -73,19 +73,28 @@ Redis主从复制的过程如下：
 | ---------------- | -------- | ---- |
 | 磁盘             | fio      | 96.97 |
 | TCP using router | iperf | 11.78 |
-| TCP direct       | iperf | 117.8 |
+| TCP direct      | iperf | 117.8 |
 | RoCE | iperf | 190.72 |
 | RDMA | ib_read_bw | 5832.04 |
 
-我们针对不同的网络情况，测试了主从复制从开始执行到完成的时间，其中master的Redis服务器中一共存储了937MB的数据，具体测试结果如下。
+我们针对不同的网络情况，测试了主从复制从开始执行到完成的时间，其中master的Redis服务器中一共存储了937MB的数据，具体不同网络情况下，不同slave数量完成同步的时间情况，测试结果如下。
 
-| 网络类型         | 测试工具 | 带宽(MB/s) |
-| ---------------- | -------- | ---- |
-| TCP using router | iperf | 11.78 |
-| TCP direct       | iperf | 117.8 |
-| RoCE | iperf | 190.72 |
-| RDMA | ib_read_bw | 5832.04 |
+| 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
+| ---------------- | -------- | ---- | ---- |
+| TCP using router | 98 | 174.3 | 259.9 |
+| TCP direct       | 19.0 | 21.1 |  |
+| RoCE | 21.03 | 26.67 | 27.09 |
+| RDMA |  |  |  |
 
+上面的测试，TCP和RoCE使用的是Redis自带的`slaveof`指令，同步完成的时间包括写磁盘的时间，我们写了一个不需要写磁盘的同步程序，
+
+
+| 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
+| ---------------- | -------- | ---- | ---- |
+| TCP using router |  |  |  |
+| TCP direct       | 4.89 | 5.05 |  |
+| RoCE |  |  |  |
+| RDMA |  |  |  |
 
 
 
