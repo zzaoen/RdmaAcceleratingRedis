@@ -21,40 +21,10 @@ Redis主从复制的过程如下：
 
 
 
-~~下表1-1是我们为一个具有1GB图片缓冲Redis服务器分别构建一个slave和两个slave的耗时情况。~~
-
-~~表1-1 Redis构建slave的耗时情况~~
-
-| ~~Slave number~~ | ~~Time consuming(s)~~ | ~~Bandwidth(MB/s)~~ |
-| ---------------- | --------------------- | ------------------- |
-| ~~one~~          | ~~98~~                | ~~10.4~~            |
-| ~~two~~          | ~~174.3~~             | ~~5.87~~            |
-| ~~three~~        | ~~259.89~~            | ~~3.94~~            |
-
-
-
-~~表1-1的结果是master只有1GB的数据时，slave同请求同步到结束的耗时情况。我们相信，当数据量更多以及更多的slave同时请求作为slave时，master-slave模式的性能更差，主要原因如下：~~
-
-1. ~~master将内存中所有的数据先写入磁盘，然后通过网络发送。数据被写入磁盘，发送时再从磁盘读取，数据拷贝次数很多，同时磁盘的读写性能也是非常差的；~~
-
-2. ~~多个slave请求同步的时候，数据都通过TCP网络传输，TCP网络本身开销很大，当出现竞争的时候性能会更差。~~
-
 针对前面我们提到的两个问题，我们使用RDMA实现了新的master-slave同步方案，
 
-1. master在内存中为Redis中的数据建立一个mapping table，节省了master将数据写入磁盘的时间开销，同时利用mapping table，可以充分利用RDMA的性能。
-2. 利用RDMA单边操作的特性，数据同步的过程交给slave利用RDMA read读取mapping table的数据，当存在多个slave同时请求同步时，多个slave利用RDMA并且读取master mapping table的数据，不会造成master性能上的压力。
-
-
-
-~~我们认为使用RDMA实现master-slave模式可以极大的提高性能，实验的结果表明，我们使用RDMA实现的master-slave模式比Redis自带的master-slave模式性能可以提升35倍-80倍，结果表1-2所示。~~
-
-~~表1-2 Redis自带master-slave模式与RDMA实现时间对比~~
-
-| ~~Slave   number~~ | ~~Origin Time-consuming(s)~~ | ~~RDMA Time-consuming(s)~~ |
-| ------------------ | ---------------------------- | -------------------------- |
-| ~~one~~            | ~~98~~                       | ~~2.8~~                    |
-| ~~two~~            | ~~174.3~~                    | ~~2.7~~                    |
-| ~~three~~          | ~~259.89~~                   | ~~3.33~~                   |
+1. master在内存中为Redis中的数据建立一个mapping table，节省了master将数据写入磁盘的时间开销，同时利用mapping table，可以充分利用RDMA的性能；
+2. 利用RDMA单边操作的特性，数据同步的过程交给slave利用RDMA read读取mapping table的数据。当存在多个slave同时请求同步时，多个slave利用RDMA并且读取master mapping table的数据，不会造成master性能上的压力。
 
 
 
@@ -84,17 +54,42 @@ Redis主从复制的过程如下：
 | TCP using router | 98 | 174.3 | 259.9 |
 | TCP direct       | 19.0 | 21.1 |  |
 | RoCE | 21.03 | 26.67 | 27.09 |
-| RDMA |  |  |  |
+| RDMA | 0.031 | 0.032 | 0.031 |
 
-上面的测试，TCP和RoCE使用的是Redis自带的`slaveof`指令，同步完成的时间包括写磁盘的时间，我们写了一个不需要写磁盘的同步程序，
+上面的实验结果有一个问题，我们用RDMA实现的主从复制
+
+上面的测试，TCP和RoCE使用的是Redis自带的`slaveof`指令，同步完成的时间包括写磁盘的时间。我们自己我们写了一个不需要写磁盘的同步程序。
+
+```c
+#define KEY_COUNT 256
+clock_t time_start, time_end;
+int main(){
+    redisContext* redis_conn = redisConnect("192.168.1.102", 6379); 
+    redisContext* redis_conn_local = redisConnect("127.0.0.1", 6379); 
+    if(redis_conn->err)   
+        printf("connection error:%s\n", redis_conn->errstr); 
+    int start = 0;
+    time_start = clock();
+    redisReply* reply = NULL;
+    while(start++ < KEY_COUNT){
+        reply = redisCommand(redis_conn, "get %d", start);
+        redisCommand(redis_conn_local, "set %d %s", start, reply->str);
+    }
+    time_end = clock();
+    double duration = (double)(time_end - time_start) / CLOCKS_PER_SEC;
+    printf("time: %fs\n", duration);
+    return 0;
+}
+```
+
+
 
 
 | 网络类型         | 一台slave(s) | 两台slave(s) | 三台slave(s) |
 | ---------------- | -------- | ---- | ---- |
-| TCP using router |  |  |  |
 | TCP direct       | 4.89 | 5.05 |  |
-| RoCE |  |  |  |
-| RDMA |  |  |  |
+| RoCE | 2.55 | 2.62 | 2.65 |
+| RDMA | 0.031 | 0.032 | 0.031 |
 
 
 
@@ -118,25 +113,7 @@ Redis主从复制的过程如下：
 
 
 
-RDMA实现的master-slave同步方案在性能上有突出的表现，并且master与slave同步的性能不会受到slave数量的影响，这受益于RDMA read单边操作。在Redis master-slave模型中，由master将磁盘文件发送给所有的slave，slave数量越多，master的网络压力越大，传输的性能也越差。但是RDMA master-slave将获取数据的任务交给了slave，利用RDMA单边操作、kernel-bypass的特性，即使slave数量不断的增加，数据同步的性能几乎不会受到任何影响。
-
-图1-3展示了Redis自带的主从复制与我们用RDMA实现的主从复制的比较。
-
-
-
-
-
-
-
-
-
-![1](./pic/bandwidth.png)
-
-图1-3两种master-slave操作带宽比较
-
-
-
-图中看到RDMA master-slave模式带宽只有345MB/s，原因是我们与Redis master-slave计算带宽的方法一致，用总的传输数据量处于同步总耗时，总耗时包括数据传输的时间以及slave收到数据后添加进本地Redis服务器的时间，实际上如果单纯计算数据传输的时间的话，我们在实验中测试只结束数据不添加进Redis服务器的带宽是上图的两倍左右。
+RDMA实现的master-slave同步方案在性能上有突出的表现，并且master与slave同步的性能不会受到slave数量的影响，这受益于RDMA read单边操作。在Redis master-slave模型中，由master将磁盘文件发送给所有的slave，slave数量越多，master的网络压力越大，传输的性能也越差。但是RDMA master-slave将获取数据的任务交给了slave，利用RDMA单边操作和kernel-bypass的特性，即使slave数量不断的增加，数据同步的性能几乎不会受到任何影响。
 
 
 
