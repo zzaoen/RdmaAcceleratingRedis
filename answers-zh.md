@@ -1,16 +1,18 @@
 我们的实验环境网络结构如下：
 
-![](pic\Ethernet-archi.jpg)
+![](./pic/answer/Ethernet-archi.jpg)
 
 图1-1 基于TCP的redis master-slave同步网络环境
 
-![](pic\RDMA-archi.jpg)
+![](./pic/answer/RDMA-archi.jpg)
 
 图1-2 基于RDMA的redis master-slave同步网络环境
 
-上面的两幅图中都是一个master与两个slave，在以太网环境下，所有的机器都与路由器相连，在RDMA环境下，所有的机器都与Mellanox交换机相连。确实，以太网的硬件参数与RDMA相差很多，原因是我们实验室没有Gb的以太网交换机。我们的实验需要测试多台机器，所以只能选择使用路由器。如果只是一台master以一台slave进行同步，机器可以使用网线直连，TCP网络性能会提升，后面我会给出新的测试数据。
+上面的两幅图中都是一个master与两个slave，在以太网环境下，所有的机器都与路由器相连，在RDMA环境下，所有的机器都与Mellanox交换机相连。确实，以太网的硬件参数与RDMA相差很多，原因是我们实验室没有Gb的以太网交换机。我们的实验需要测试多台机器，所以只能选择使用路由器。如果只是一台master以一台slave进行同步，机器可以使用网线直连，TCP网络性能会提升，我会在第二部分给出一些新的测试数据。
 
 
+
+### 第一部分（问题1,2,5,6,8）
 
 先回答问题1、2、5、6、8：
 
@@ -42,9 +44,9 @@ method2: using RDMA(56Gb) without file writing to disk, only using memory.
 
 对于问题8，关于RoCE。在之前的比较中，我们只关注了redis自带的和我们用RDMA实现了这两种master-slave数据同步方案的比较，我们并没有测试RoCE。我在相关文章上看过RoCE的介绍，但是并没有对RoCE认识并不多，我对RoCE的认识是我们利用Mellanox硬件，在使用网络时指定Mellanox网卡的IP地址用来通信，比如scp指令传输文件是指定Mellanox网卡的IP地址，那么文件传输就是RoCE，不过我并不确定自己理解的对不对。
 
-![](pic\RoCE.png)
+![](./pic/answer/RoCE.png)
 
-
+图1-3 支持RDMA的网络协议
 
 根据您的问题，我重新做了几个实验，以下所有的测试都是一个master和一个slave的情况
 
@@ -65,61 +67,31 @@ method2: using RDMA(56Gb) without file writing to disk, only using memory.
 
 
 
-现在，我将给出我们实验环境的一些数据，回答问题2，11和12。
+### 第二部分（问题4,7,10,13）
 
-fio测试的本地磁盘的数据如下：
+问题7提到为什么Redis的master-slave机制需要将内存数据写入到磁盘。这个是我们参考网上关上资料确定的，在Redis运行日志中也可以确定master收到slave的请求先将内存数据写入本地磁盘。![tcp-direct-master-log](./pic/answer/tcp-router-master-log.png)
 
-![](pic\answer\fio.png)
+图1-4 TCP using router，数据同步时master的日志输出
 
+![tcp-router-slave-log](./pic/answer/tcp-router-slave-log.png)
 
-
-iperf测试的TCP网络数据如下：
-
-![](pic\answer\iperf-tcp-router.png)
-
-上面这个是使用路由器之后iperf的测试结果。
-
-![rdma-master-log](pic\answer\iperf-direct-tcp.png)
-
-上面这个是没有使用路由器，网卡直接连接的iperf测试结果。
-
-
-
-ib_send_bw和ib_read_bw数据如下：
-
-![ib_send_bw](pic\answer\ib_send_bw.png)
-
-![ib_read_bw](pic\answer\ib_read_bw.png)
-
-
-
-
-
-
-
-问题7提到为什么Redis的master-slave机制需要将内存数据写入到磁盘。这个是我们参考网上关上资料确定的，在Redis运行日志中也可以确定master收到slave的请求先将内存数据写入本地磁盘。![tcp-direct-master-log](pic\answer\tcp-router-master-log.png)
-
-图1-3 TCP using router，数据同步时master的日志输出
-
-![tcp-router-slave-log](pic\answer\tcp-router-slave-log.png)
-
-图1-4 TCP using router，数据同步时slave的日志输出
+图1-5 TCP using router，数据同步时slave的日志输出
 
 从日志我们可以看到，slave请求同步后，master查看是否可以进行resynchronization（如果slave之前与master同步过可以resynchronization），如果不可以进行resynchronization，master将数据写入到磁盘文件，随后文件发送给slave。slave收到文件后加载到内存中。
 
 问题4和10的答案也可以从这里得到答案。
 
-![rdma-master-log](pic\answer\tcp-direct-master-log.png)
+![rdma-master-log](./pic/answer/tcp-direct-master-log.png)
 
-图1-5 TCP Direct，数据同步时master的日志输出
+图1-6 TCP Direct，数据同步时master的日志输出
 
-![rdma-master-log](pic\answer\roce-master-log.png) 图1-6 RoCE，数据同步时master的日志输出
+![rdma-master-log](./pic/answer/roce-master-log.png) 图1-7 RoCE，数据同步时master的日志输出
 
 图1-3、图1-5和图1-6都是master与slave数据同步是master的日志
 
-- 图1-3使用的是带路由器的TCP
-- 图1-5是不带路由器，直连的TCP
-- 图1-6使用的是RoCE。
+- 图1-4使用的是带路由器的TCP
+- 图1-6是不带路由器，直连的TCP
+- 图1-7使用的是RoCE。
 
 我们整理一下数据，可以看到：
 
@@ -184,6 +156,48 @@ while(j < ARR_LEN)
 
 
 问题13是问我们的RDMA read为什么没有达到硬件环境应有的带宽，我们的硬件环境最大带宽是3180MB/s，如果在我们的程序中去掉上面我们说的数据拷贝的代码，我们的程序完成数据传输的时间是0.0082s，带宽是2754.92MB/s。我们目前依然也在做实验，希望可以解决造成性能不是特别高的问题。
+
+
+
+### 第三部分（问题3,11,12）
+
+现在，我将给出我们实验环境的一些数据，回答问题2，11和12。
+
+fio测试的本地磁盘的数据如下：
+
+![](D:/git/RdmaAcceleratingRedis/pic/answer/fio.png)
+
+图1-8 fio磁盘测试
+
+iperf测试的TCP网络数据如下：
+
+![](D:/git/RdmaAcceleratingRedis/pic/answer/iperf-tcp-router.png)
+
+图1-9 iperf测试TCP using router
+
+上面这个是使用路由器之后iperf的测试结果。
+
+![rdma-master-log](D:/git/RdmaAcceleratingRedis/pic/answer/iperf-direct-tcp.png)
+
+图1-10 iperf测试TCP direct
+
+上面这个是没有使用路由器，网卡直接连接的iperf测试结果。
+
+
+
+ib_send_bw和ib_read_bw数据如下：
+
+![ib_send_bw](D:/git/RdmaAcceleratingRedis/pic/answer/ib_send_bw.png)
+
+图1-10 ib_send_bw
+
+![ib_read_bw](D:/git/RdmaAcceleratingRedis/pic/answer/ib_read_bw.png)
+
+图1-9 ib_write_bw
+
+
+
+
 
 
 

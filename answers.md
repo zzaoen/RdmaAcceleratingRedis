@@ -1,10 +1,10 @@
 The network structure we used in the previous experiment is as followsï¼š
 
-![](./pic/Ethernet-archi.jpg)
+![](./pic/answer/Ethernet-archi.jpg)
 
 Figure 1-1 Master-slave based on TCP using router
 
-![](./pic/RDMA-archi.jpg)
+![](./pic/answer/RDMA-archi.jpg)
 
 Figure 1-2 Master-slave based on RDMA
 
@@ -48,7 +48,7 @@ I have read the introduction of RoCE in related articles and papers, but I donâ€
 
 
 
-![](./pic/RoCE.png)
+![](./pic/answer//RoCE.png)
 
 Figure1-3 RDMA supported protocol
 
@@ -95,9 +95,9 @@ Figure 1-7 The log master during data synchronization when **using RoCE**
 
 The logs of master and slave data synchronization are shown in Figure 1-3, Figure 1-5, and Figure 1-6.
 
-- Figure 1-3 shows TCP with a router
-- Figure 1-5 shows the TCP Direct
-- Figure 1-6 shows RoCE
+- Figure 1-4 shows TCP with a router
+- Figure 1-6 shows the TCP Direct
+- Figure 1-7 shows RoCE
 
 Let's organize the data and we can see:
 
