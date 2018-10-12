@@ -2,58 +2,113 @@
 
 ## 1 Introduction
 
-There is a very simple way to use and configure Master-Slave replication because Master-Slave strategy is supported in Redis. You can initiate Master-Slave mode in Redis by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Table 1-1 shows the time consuming situation for building a different number of slaves for a Redis server with a 1GB image buffer.
+Redis implement the replication using Master-Slave strategy. You can initiate Master-Slave mode in Redis by specifying `SLAVEOF` in configuration file or run `SLAVEOF` command in the terminal. Then Redis in slave will replica all the data from the master.
 
-Table 1-1 Time consuming of 1GB data using redis master-slave operation
+The process of Redis master-slave replication is as follows:
 
-| Slave number | Time consuming(s) | Bandwidth(MB/s) |
-| ------------ | ----------------- | --------------- |
-| one          | 98                | 10.4            |
-| two          | 174.3             | 5.87            |
-| three        | 259.89            | 3.94            |
+1. slave runs `slaveof` command and then sends requests to master.
+2. All in-memory key-value pairs are dumped into local disk by master after receiving request for synchronization. After that, master starts a thread to send the data in disk to slave.
+3. slave writes the data into local Redis after receiving the file.
 
-**The mechanism of the Redis Master-Slave policy:** Master writes all the pairs of Key-Value into local HDD or SSD after receiving the synchronization request from the slave. Then master starts a background thread to send the file to the slave, when the slave receives the file and then writes the content to the local redis server. In this way, the master and the slave have have exactly the same data. But in the master-slave mode, the slave is read-only, and only the master can receive the write request.
+The slave then get the same data as the master after synchronization. We found two challenges in the process:
 
-The result in Table 1-1 is the time-consuming situation in which the slave synchronizes to the end of the request with only 1 GB of data. It demonstrates that when the amount of data is more and more slaves are simultaneously requesting as slaves, the performance of the master-slave mode is even worse. The main reasons are as follows:
+1. The master dump the data from memory to disk and send out later which incurs the unbearable overhead of Read/Write disk especially when a large amount of data stored in redis. We found that the time for writing the disk during the synchronization occupied more than half of the total time when the master network performance is good.
+2. The master is responsible for sending data to all clients which incurs high overload to network and CPU of master. When a large number of slaves request at the same time, the master's network load increases and the network transmission performance decreases seriously.
 
-1. The master writes all the data in memory to the local disk first, and then sends it through the network. The data is written to the disk, and then read from the disk when sent so I/O operation induces large overhead, and the read and write performance of the disk is also very poor.
-2. When multiple slave requests are synchronized, the data is transmitted over the TCP network. The TCP network induces a large overhead, and performance will be worse when there is competition.
+For the two problems we mentioned above, we implemented a new master-slave synchronization scheme using RDMA.
 
-RDMA permits high-throughout, low-latency networking, which is especially useful in massively parallel computer clusters. Therefore, implementing the master-slave mode through RDMA can greatly improve performance. The experimental results show that the master-slave mode implemented by RDMA is 35 times-80 times better than the master-slave mode implemented by TCP. Table 1-2 shows the results.
+1. The master creates a in-memory mapping table as buffer for Redis, which saves the time overhead for the master to write data to the disk. And the mapping table can fully take advantage of the RDMA's performance.
+2. The slave uses the RDMA `read` to read the data in mapping table in synchronization. Due to the characteristics of RDMA one-sided operation, when multiple slaves read the data of the master's mapping table through RDMA, it does not incur a performance load on the master.
 
-Table 1-2 Comparison of TCP and RDMA for Master-Slave
+## 2 Experimental Environment & Results
 
-| Slave   number | Origin Time-consuming(s) | RDMA Time-consuming(s) |
-| -------------- | ------------------------ | ---------------------- |
-| one            | 98                       | 2.8                    |
-| two            | 174.3                    | 2.7                    |
-| three          | 259.89                   | 3.33                   |
+Since the lab does not have a GB-class Ethernet switch, there is only one 100Mb Ethernet router. When we test synchronization within multiple slaves, the machines are connected together by routers. In order to test the performance when using better Ethernet, we connect the Ethernet network card directly with the network cable. 
 
-## 2 RDMA Master-Slave Solution
+The experimental environment is as follows:
+
+1. Ethernet network with routers
+2. Ethernet network with cable directly
+3. RoCE
+4. RDMA Verbs
+
+We tested the performance of hardware devices using testing tools:
+
+Table 2-1Bandwidth performance of different hardware devices 
+
+| Device           | Tools      | Bandwidth(MB/s) |
+| ---------------- | ---------- | --------------- |
+| Disk             | fio        | 96.97           |
+| TCP using router | iperf      | 11.78           |
+| TCP direct       | iperf      | 117.8           |
+| RoCE             | iperf      | 190.72          |
+| RDMA             | ib_read_bw | 3180.76         |
+
+We tested the time from master to slave replication from start to finish for different network conditions. The master's Redis server stores a total of 937MB of data. In different network situations, the test results of the time when different slaves complete synchronization are as follows.
+
+Table 2-2 Synchronization Time with disk writing
+
+| Network Type     | one slave(s) | two slave(s) | three slave(s) |
+| ---------------- | ------------ | ------------ | -------------- |
+| TCP using router | 98           | 174.3        | 259.9          |
+| TCP direct       | 19.0         | 21.1         | \              |
+| RoCE             | 21.03        | 26.67        | 27.09          |
+| RDMA             | 0.031        | 0.032        | 0.031          |
+
+The above experimental results meet a problem, we use the RDMA to implement master-slave replication.
+
+The above experimental results have a problem: in the master-slave replication method of RDMA implementation, the master creates a mapping table in memory, and the slave uses the RDMA `read` operation to directly read the data in the master memory. TCP using router, TCP direct, and RoCE all require the master to dump data in memory to disk first. We use Redis' C programming interface to implement a simple program that eliminates the time the master writes to the disk.
+
+```c
+#define KEY_COUNT 256
+clock_t time_start, time_end;
+int main(){
+    redisContext* redis_conn = redisConnect("192.168.1.102", 6379); 
+    redisContext* redis_conn_local = redisConnect("127.0.0.1", 6379); 
+    if(redis_conn->err)   
+        printf("connection error:%s\n", redis_conn->errstr); 
+    int start = 0;
+    time_start = clock();
+    redisReply* reply = NULL;
+    while(start++ < KEY_COUNT){
+        reply = redisCommand(redis_conn, "get %d", start);
+        redisCommand(redis_conn_local, "set %d %s", start, reply->str);
+    }
+    time_end = clock();
+    double duration = (double)(time_end - time_start) / CLOCKS_PER_SEC;
+    printf("time: %fs\n", duration);
+    return 0;
+}
+```
+
+Table 2-3 Synchronization Time without disk writing
+
+| Network Type | one slave(s) | two slave(s) | three slave(s) |
+| ------------ | ------------ | ------------ | -------------- |
+| TCP direct   | 4.89         | 5.05         | \              |
+| RoCE         | 2.55         | 2.62         | 2.65           |
+| RDMA         | 0.031        | 0.032        | 0.031          |
+
+**Note:** In table 2-2 and table 2-3, synchronization time for three slaves in TCP direct Network is missed because we meet some experimental environment configuration problems.
+
+## 3 RDMA Master-Slave Solution
 
 We implemented an master-slave synchronization solution by using RDMA, and the main reasons for the performance improvement are as follows:
 
-1. The data transfer between master and slave is via RDMA read. RDMA read is a one-side operation, all slaves can read data from the master memory in parallel, without causing network competition.
+1. The data transfer between master and slave is via RDMA read. RDMA read is a one-side operation, all slaves can read data from the master memory in parallel, without incurring network competition.
 2. The master's data does not be written to disk. The master creates a mapping table in the memory. The mapping table is composed of consecutive fixed-size data areas. The master maps the key-value stored in the memory to the mapping table, and the slave obtains data from the mapping table.
-3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read. Figure 1-2 shows the detailed process.
+3. The slave only knows the starting address of the mapping table on the master. The slave calculates the address of the data on the mapping table by adding the starting address, and directly reads the data from the master memory area by using RDMA read. Figure 3-1 shows the detailed process.
 
 
 
-![1](./pic/communication.png)
+![1](.\pic\answer\communication.png)
 
-Figure 1-2 Master-slave using RDMA and Mapping Table
+Figure 3-1 Master-slave using RDMA and Mapping Table
 
 
 
-The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. Figure 1-3 shows the bandwidth comparison for master-slave mode between TCP and RDMA. 
+The master-slave synchronization scheme implemented by RDMA has outstanding performance. The performance of master and slave synchronization is not affected by the number of slaves, which benefits from RDMA read unilateral operation. In the Redis TCP master-slave model, the master sends the file in the disk to all slaves. The more slaves, the greater the network pressure of the master and the worse the performance of the transmission. However, the RDMA master-slave hands over the task of acquiring data to the slave. With the RDMA unilateral operation and the kernel-bypass feature, the performance of data synchronization will hardly be affected no matter how many slaves. 
 
-![1](pic/bandwidth.png)
-
-Figure 1-3 Comparison of bandwidths in two master-slave mode
-
-The figure above shows that the RDMA master-slave mode bandwidth is only 345MB/s, because our calculation are consistent with Redis TCP master-slave's method of calculating bandwidth. The total amount of data transferred is divided by the total time spent on synchronization. The total time spent includes the time of data transmission and the time it takes to modify the local Redis server after the slave receives the data. In fact, if we only calculate the time of data transmission, the bandwidth we tested in the experiment is about twice that of the above figure.
-
-## 3 How to Run
+## 4 How to Run
 
 The experimental hardware environment and software environment are as follows:
 
@@ -144,7 +199,7 @@ slaveof 192.168.1.100 6379
 
 The master and slave1 data synchronization related logs can be seen in the redis-server program output of master and slave1, as shown below:
 
-![1](pic/slave.png)
+![1](./pic/slave.png)
 
 From the log, we can see the time from the start of the slave synchronization to the receipt of all the master data and stored in memory, based on which we can calculate the performance of the synchronization.
 
@@ -162,7 +217,7 @@ make
 ./redis-init
 ```
 
-![1](pic/redis-init.png)
+![1](./pic/redis-init.png)
 
 ### 3.3 RDMA Data Synchronization Scheme
 
@@ -187,7 +242,7 @@ make
 
 In the rdma-server code, the port we fixed the program binding is 12345.
 
-![1](pic/rdma-server.png)
+![1](./pic/rdma-server.png)
 
 After the rdma-server program starts, it will use `hiredis` to access the key-value data stored in the Redis server on the master and create a mapping table in memory.
 
@@ -199,7 +254,7 @@ make
 ./rdma-client 192.168.0.100 12345
 ```
 
-![1](pic/rdma-client.png)
+![1](./pic/rdma-client.png)
 
 Rdma-client specifies the IP address and port of rdma-server when running. After the program runs, the client calculates the address of the read data according to the first address of the master return mapping table, and initiates a RDMA read unilateral request directly from the master. Read data in memory. The read data is added to the local Redist database.
 
