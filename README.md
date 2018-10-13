@@ -99,7 +99,7 @@ We implemented an master-slave synchronization solution by using RDMA, and the m
 
 
 
-![1](.\pic\answer\communication.png)
+![1](./pic/answer/communication.png)
 
 Figure 3-1 Master-slave using RDMA and Mapping Table
 
