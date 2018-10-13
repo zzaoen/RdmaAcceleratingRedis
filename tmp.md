@@ -52,7 +52,6 @@ Table 2-2 Synchronization Time with disk writing
 | TCP using router | 98           | 174.3        | 259.9          |
 | TCP direct       | 19.0         | 21.1         | \              |
 | RoCE             | 21.03        | 26.67        | 27.09          |
-| RDMA             | 0.031        | 0.032        | 0.031          |
 
 The above experimental results have a problem: in the master-slave replication method of RDMA implementation, the master creates a mapping table in memory, and the slave uses the RDMA `read` operation to directly read the data in the master memory. TCP using router, TCP direct, and RoCE all require the master to dump data in memory to disk first. We use Redis' C programming interface to implement a simple program that eliminates the time the master writes to the disk.
 
@@ -85,8 +84,10 @@ Table 2-3 Synchronization Time without disk writing
 | TCP using router | 87.6         | 154.3        | 243.2          |
 | TCP direct       | 4.89         | 5.05         | \              |
 | RoCE             | 2.55         | 2.62         | 2.65           |
-| RDMA             | 0.031        | 0.032        | 0.031          |
 
+| Network Type | one slave(s) | two slave(s) | three slave(s) |
+| ------------ | ------------ | ------------ | -------------- |
+| RDMA         | 0.031        | 0.032        | 0.031          |
 **Note:** In table 2-2 and table 2-3, synchronization time for three slaves in TCP direct Network is missed because we meet some experimental environment configuration problems.
 
 ## 3 RDMA Master-Slave Solution
