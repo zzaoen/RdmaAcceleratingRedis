@@ -1,4 +1,16 @@
 # Rdma Accelerating Redis
+## Notice
+Hi there, thank you for your interest in this repo. It's our great honor. 
+
+We've designed and implemented this to attend the 6th Student RDMA Pragramming Competetion. We were so lucky to won a third prize.
+![22](./pic/final.png)
+
+Unfortunately, **this repo is no longer maintained** for lots of reasons. 
+
+RDMA is amazing, wish you have a great time with RDMA :).
+
+-- 2021.07.28
+
 
 ## 1 Introduction
 
